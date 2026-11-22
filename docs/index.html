@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <div id="pinScreen" class="hidden">
@@ -47,7 +47,7 @@
 <main>
   <details class="card" id="sec-agenda" open>
     <summary><span class="ico">⏰</span><h2>Coming up</h2><span class="count" id="cnt-agenda"></span></summary>
-    <div class="body"><ul class="list" id="agenda"></ul></div>
+    <div class="body"><ul class="list" id="agenda"></ul><div class="hint">Tap to change, swipe right to delete. Tap any date on the calendar to see or add events.</div></div>
   </details>
 
   <details class="card wide" id="sec-calendar" open>
@@ -70,7 +70,7 @@
       <div class="addrow"><input id="shopQuick" placeholder="Add an item, e.g. Milk"><button class="btn" id="shopAdd">Add</button></div>
       <div id="shopping"></div>
       <div class="row" style="margin-top:10px"><button class="btn ghost small" id="shopClear">Clear ticked items</button>
-      <span class="sub">Fridge photo? Send it to Grok Bot and it'll add what's running low.</span></div>
+      <span class="sub">Swipe right on an item to delete it. Fridge photo? Send it to Grok Bot and it'll add what's running low.</span></div>
     </div>
   </details>
 
@@ -105,8 +105,8 @@
 <footer class="foot" id="foot"></footer>
 
 <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
-<script src="config.js?v=3"></script>
-<script src="demo-data.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="config.js?v=4"></script>
+<script src="demo-data.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

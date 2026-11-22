@@ -127,15 +127,15 @@ function ask(title, text, choices){
     $$("#sheet [data-choice]").forEach(b=>b.onclick=ev=>{ ev.stopPropagation(); const i=Number(b.dataset.choice); hideModal(); resolve(i<0?null:choices[i].value); });
   });
 }
-async function deleteEvent(id){
+async function deleteEvent(id, noConfirm){
   const e = data.events.find(x=>String(x.id)===String(id)); if(!e) return;
   let scope = "this";
   if(e.recurring){
     scope = await ask("Delete repeating event", "“"+e.title+"” repeats. Delete just this one, or every repeat?", [{label:"Just this one", value:"this", danger:true},{label:"All repeats", value:"all", danger:true}]);
-    if(!scope) return;
-  } else {
+    if(!scope){ backToDay(); return; }
+  } else if(!noConfirm){
     const ok = await ask("Delete event?", "“"+e.title+"” on "+fmtDate(e.date)+(live()?" will be removed from the shared Google calendar for everyone.":"."), [{label:"Delete", value:"yes", danger:true}]);
-    if(!ok) return;
+    if(!ok){ backToDay(); return; }
   }
   op("delete","events",null,id,{scope});
 }
@@ -144,7 +144,9 @@ function render(){
   const title = (data.settings&&data.settings.title)||"Family Board";
   $("#title").textContent = "🏡 "+title; document.title = title;
   document.body.classList.toggle("kiosk", !!prefs.kiosk);
+  openRow = null;
   renderAgenda(); renderCalendar(); renderShopping(); renderTodos(); renderMeals(); renderTrips(); renderNotes();
+  if(modalDay && (modalKind==="day" || modalKind==="")) renderDaySheet();
   $("#foot").textContent = (live()? "Connected to the family sheet" + (lastSync?" · updated "+lastSync.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}):"") : "Demo mode") + (prefs.me?" · you are "+prefs.me:"");
 }
 
@@ -153,14 +155,18 @@ function eventLine(e){
   const when = e.time ? fmtTime(e.time)+(e.end?"–"+fmtTime(e.end):"") : (e.endDate&&e.endDate!==e.date?"Until "+fmtDate(e.endDate):"All day");
   return `<div class="grow"><div><b>${esc(e.title)}</b>${e.recurring?` <span class="sub" title="Repeats">🔁</span>`:""}</div><div class="sub">${esc(when)}${e.location?" · "+esc(e.location):""}</div>${e.notes?`<div class="sub">${esc(e.notes)}</div>`:""}</div>`;
 }
-const evDel = e => `<button class="x" data-del="events" data-id="${esc(e.id)}" aria-label="Delete event" title="Delete">×</button>`;
+/* A swipeable row: swipe right (touch or mouse drag) to reveal a red Delete button. */
+const swRow = (type, id, inner, cls, editable) => `<li class="sw ${cls||""}" data-sw-type="${type}" data-sw-id="${esc(id)}"><button class="swdel" data-swdel="${type}" data-id="${esc(id)}" tabindex="-1">Delete</button><div class="swc"${editable===false?"":` data-edit="${type}" data-id="${esc(id)}"`}>${inner}</div></li>`;
+function eventsOn(k){
+  return data.events.filter(e=>e.date<=k && (e.endDate||e.date)>=k).sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+}
 function renderAgenda(){
   const t = todayStr();
   const up = eventsSorted().filter(e=>(e.endDate||e.date)>=t).slice(0,12);
   const trips = data.trips.filter(x=>x.status!=="Done");
   let h = up.map(e=>{ const d=parseYmd(e.date);
-    return `<li class="${e.date===t?"today":""}" data-edit="events" data-id="${esc(e.id)}"><div class="datebox"><small>${DOW[d.getDay()]}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></div>${eventLine(e)}${evDel(e)}</li>`; }).join("");
-  h += trips.map(x=>`<li data-edit="trips" data-id="${esc(x.id)}"><div class="datebox"><small>Trip</small><b>✈️</b><small>&nbsp;</small></div><div class="grow"><b>${esc(x.name)}</b><div class="sub">${esc(x.when)}${x.details?" · "+esc(x.details):""}</div></div></li>`).join("");
+    return swRow("events", e.id, `<div class="datebox"><small>${DOW[d.getDay()]}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></div>${eventLine(e)}`, e.date===t?"today":""); }).join("");
+  h += trips.map(x=>swRow("trips", x.id, `<div class="datebox"><small>Trip</small><b>✈️</b><small>&nbsp;</small></div><div class="grow"><b>${esc(x.name)}</b><div class="sub">${esc(x.when)}${x.details?" · "+esc(x.details):""}</div></div>`)).join("");
   $("#agenda").innerHTML = h || `<li class="empty">Nothing coming up.</li>`;
   $("#cnt-agenda").textContent = up.length||"";
 }
@@ -175,18 +181,18 @@ function renderCalendar(){
   const t=todayStr();
   for(let i=0;i<42;i++){ const d=new Date(start); d.setDate(start.getDate()+i); const k=ymd(d); const ev=byDay[k]||[];
     if(i>=35 && d.getMonth()!==m) break;
-    h += `<div class="day ${d.getMonth()!==m?"other":""} ${k===t?"is-today":""} ${k===selDay?"sel":""}" data-day="${k}"><div class="n">${d.getDate()}</div><div class="dots">${ev.slice(0,4).map(()=>"<i></i>").join("")}</div>${ev.slice(0,3).map(e=>`<div class="lbl">${e.time?fmtTime(e.time)+" ":""}${esc(e.title)}</div>`).join("")}${ev.length>3?`<div class="lbl">+${ev.length-3} more</div>`:""}</div>`;
+    h += `<div class="day ${d.getMonth()!==m?"other":""} ${k===t?"is-today":""} ${k===selDay?"sel":""}" data-day="${k}" role="button" aria-label="${esc(fmtDate(k))}"><div class="n">${d.getDate()}</div><div class="dots">${ev.slice(0,4).map(()=>"<i></i>").join("")}</div>${ev.slice(0,3).map(e=>`<div class="lbl">${e.time?fmtTime(e.time)+" ":""}${esc(e.title)}</div>`).join("")}${ev.length>3?`<div class="lbl">+${ev.length-3} more</div>`:""}</div>`;
   }
   $("#calGrid").innerHTML = h;
-  const sel = (byDay[selDay]||[]).slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
-  $("#dayEvents").innerHTML = `<div class="cat">${esc(fmtDate(selDay))}</div><ul class="list">${sel.map(e=>`<li data-edit="events" data-id="${esc(e.id)}">${eventLine(e)}${evDel(e)}</li>`).join("")||'<li class="empty">Nothing on this day.</li>'}</ul><div class="row" style="margin-top:6px"><button class="btn ghost small" data-addday="${selDay}">+ Add event on this day</button></div>`;
+  const sel = eventsOn(selDay);
+  $("#dayEvents").innerHTML = `<div class="cat">${esc(fmtDate(selDay))}</div><ul class="list">${sel.map(e=>swRow("events", e.id, eventLine(e))).join("")||'<li class="empty">Nothing on this day.</li>'}</ul><div class="row" style="margin-top:6px"><button class="btn ghost small" data-addday="${selDay}">+ Add event on this day</button></div>`;
 }
 function renderShopping(){
   const groups = {};
   data.shopping.forEach(s=>{ const c=CATS.includes(s.category)?s.category:"Other"; (groups[c]=groups[c]||[]).push(s); });
   let h="";
   CATS.forEach(c=>{ const g=groups[c]; if(!g) return; g.sort((a,b)=>(a.done-b.done)||String(a.item).localeCompare(String(b.item)));
-    h+=`<div class="cat">${esc(c)}</div><ul class="list">`+g.map(s=>`<li class="${s.done?"done":""}"><button class="tick ${s.done?"on":""}" data-toggle="shopping" data-id="${esc(s.id)}" aria-label="Tick">${s.done?"✓":""}</button><div class="grow" data-edit="shopping" data-id="${esc(s.id)}">${esc(s.item)}${s.qty?` <span class="sub">· ${esc(s.qty)}</span>`:""}${s.note?`<div class="sub">${esc(s.note)}</div>`:""}</div>${s.by?chip(s.by):""}<button class="x" data-del="shopping" data-id="${esc(s.id)}" aria-label="Remove">×</button></li>`).join("")+`</ul>`; });
+    h+=`<div class="cat">${esc(c)}</div><ul class="list">`+g.map(s=>swRow("shopping", s.id, `<button class="tick ${s.done?"on":""}" data-toggle="shopping" data-id="${esc(s.id)}" aria-label="Tick">${s.done?"✓":""}</button><div class="grow" data-edit="shopping" data-id="${esc(s.id)}">${esc(s.item)}${s.qty?` <span class="sub">· ${esc(s.qty)}</span>`:""}${s.note?`<div class="sub">${esc(s.note)}</div>`:""}</div>${s.by?chip(s.by):""}`, s.done?"done":"", false)).join("")+`</ul>`; });
   $("#shopping").innerHTML = h || `<div class="empty">The list is empty.</div>`;
   $("#cnt-shopping").textContent = data.shopping.filter(s=>!s.done).length||"";
 }
@@ -197,7 +203,7 @@ function renderTodos(){
   if(f==="Done") list=list.filter(x=>x.done); else { list=list.filter(x=>!x.done); if(f!=="All") list=list.filter(x=>x.assignee===f||x.assignee==="Everyone"); }
   list.sort((a,b)=>(a.due||"9999").localeCompare(b.due||"9999"));
   const t=todayStr();
-  $("#todos").innerHTML = list.map(x=>`<li class="${x.done?"done":""}"><button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub">${x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date"}</div></div>${chip(x.assignee)}<button class="x" data-del="todos" data-id="${esc(x.id)}">×</button></li>`).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
+  $("#todos").innerHTML = list.map(x=>swRow("todos", x.id, `<button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub">${x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date"}</div></div>${chip(x.assignee)}`, x.done?"done":"", false)).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
   $("#cnt-todos").textContent = data.todos.filter(x=>!x.done).length||"";
 }
 function renderMeals(){
@@ -212,13 +218,74 @@ function renderMeals(){
   $("#cnt-meals").textContent = upcoming.length||"";
 }
 function renderTrips(){
-  $("#trips").innerHTML = data.trips.map(x=>`<li><div class="grow" data-edit="trips" data-id="${esc(x.id)}"><b>${esc(x.name)}</b> <span class="sub">${esc(x.status||"")}</span><div class="sub">${esc(x.when)}</div>${x.details?`<div>${esc(x.details)}</div>`:""}</div><button class="x" data-del="trips" data-id="${esc(x.id)}">×</button></li>`).join("") || `<li class="empty">No trips yet.</li>`;
+  $("#trips").innerHTML = data.trips.map(x=>swRow("trips", x.id, `<div class="grow"><b>${esc(x.name)}</b> <span class="sub">${esc(x.status||"")}</span><div class="sub">${esc(x.when)}</div>${x.details?`<div>${esc(x.details)}</div>`:""}</div>`)).join("") || `<li class="empty">No trips yet.</li>`;
   $("#cnt-trips").textContent = data.trips.length||"";
 }
 function renderNotes(){
   const list = data.notes.slice().sort((a,b)=>(b.pinned-a.pinned)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
-  $("#notes").innerHTML = list.map(n=>`<div class="note ${n.pinned?"pinned":""}"><div style="display:flex;gap:6px"><div class="grow" data-edit="notes" data-id="${esc(n.id)}">${esc(n.text)}</div><button class="x" data-toggle="notes" data-id="${esc(n.id)}" title="Pin">${n.pinned?"📌":"📍"}</button><button class="x" data-del="notes" data-id="${esc(n.id)}">×</button></div><div class="meta">${n.by?esc(n.by)+" · ":""}${n.createdAt?new Date(n.createdAt).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}</div></div>`).join("") || `<div class="empty">No messages.</div>`;
+  $("#notes").innerHTML = list.length ? `<ul class="list notes">`+list.map(n=>swRow("notes", n.id, `<div class="grow" data-edit="notes" data-id="${esc(n.id)}">${esc(n.text)}<div class="meta">${n.by?esc(n.by)+" · ":""}${n.createdAt?new Date(n.createdAt).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}</div></div><button class="x" data-toggle="notes" data-id="${esc(n.id)}" title="Pin">${n.pinned?"📌":"📍"}</button>`, "note"+(n.pinned?" pinned":""), false)).join("")+`</ul>` : `<div class="empty">No messages.</div>`;
   $("#cnt-notes").textContent = data.notes.length||"";
+}
+
+/* ---------- day sheet (tap a date on the calendar) ---------- */
+let modalDay = null;
+function openDaySheet(k){ selDay=k; modalDay=k; renderCalendar(); renderDaySheet(); }
+function renderDaySheet(){
+  const k = modalDay; if(!k) return;
+  const d = parseYmd(k);
+  const list = eventsOn(k);
+  showModal(`<h2>${DOW[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}</h2>
+    <button class="btn big" data-addday="${k}">＋ Add event</button>
+    <ul class="list dayList" style="margin-top:10px">${list.map(e=>swRow("events", e.id, eventLine(e))).join("") || '<li class="empty">Nothing on this day yet.</li>'}</ul>
+    ${list.length?'<div class="hint">Tap an event to change it. Swipe right to delete it.</div>':""}
+    <div class="actions"><button class="btn ghost" id="dayClose">Close</button></div>`, "day");
+  $("#dayClose").onclick = ()=>hideModal(true);
+}
+function backToDay(){ if(modalDay) renderDaySheet(); }
+
+/* ---------- swipe right to delete ---------- */
+const SW_W = 96;
+let sw = null, openRow = null, suppressClick = false;
+function closeOpenRow(){ if(openRow){ openRow.classList.remove("open"); openRow = null; } }
+function swipeDelete(type, id){
+  closeOpenRow();
+  if(type==="events"){ deleteEvent(id, true); return; } // repeating events still ask "Just this one" / "All repeats"
+  op("delete", type, null, id);
+}
+function bindSwipe(){
+  document.addEventListener("pointerdown", e=>{
+    suppressClick = false;
+    if(e.button > 0) return;
+    if(e.target.closest(".swdel")) return;
+    if(openRow){ closeOpenRow(); suppressClick = true; return; } // a tap elsewhere just hides the Delete button
+    const row = e.target.closest(".sw"); if(!row) return;
+    if(e.target.closest("input,select,textarea,a")) return;
+    sw = { row, x:e.clientX, y:e.clientY, id:e.pointerId, mode:null, dx:0 };
+  });
+  document.addEventListener("pointermove", e=>{
+    if(!sw || e.pointerId!==sw.id) return;
+    const dx = e.clientX-sw.x, dy = e.clientY-sw.y;
+    if(!sw.mode){
+      if(Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)*1.3){ sw.mode="h"; sw.row.classList.add("dragging"); try{ sw.row.setPointerCapture(e.pointerId); }catch(_){} }
+      else if(Math.abs(dy) > 10 || dx < -10){ sw = null; return; }
+      else return;
+    }
+    sw.dx = dx;
+    sw.row.querySelector(".swc").style.transform = `translateX(${Math.max(0, Math.min(SW_W*1.3, dx))}px)`;
+    e.preventDefault();
+  }, {passive:false});
+  const end = e=>{
+    if(!sw || e.pointerId!==sw.id) return;
+    const s = sw; sw = null;
+    if(s.mode!=="h") return;
+    suppressClick = true;
+    s.row.classList.remove("dragging");
+    s.row.querySelector(".swc").style.transform = "";
+    if(s.dx > SW_W/2 && e.type!=="pointercancel"){ s.row.classList.add("open"); openRow = s.row; }
+  };
+  document.addEventListener("pointerup", end);
+  document.addEventListener("pointercancel", end);
+  document.addEventListener("click", e=>{ if(suppressClick){ suppressClick=false; e.stopPropagation(); e.preventDefault(); } }, true);
 }
 
 /* ---------- forms ---------- */
@@ -246,7 +313,7 @@ function openForm(type, id, preset){
   h += `<div class="actions">${id?`<button class="btn ghost" id="fDel" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" id="fCancel">Cancel</button><button class="btn" id="fSave">Save</button></div>`;
   showModal(h);
   const first=$("#sheet input,#sheet textarea"); if(first && !id) first.focus();
-  $("#fCancel").onclick = hideModal;
+  $("#fCancel").onclick = ()=>{ hideModal(); backToDay(); };
   if(id) $("#fDel").onclick = ()=>{ if(type==="events"){ hideModal(); deleteEvent(id); return; } if(confirm("Delete this?")){ hideModal(); op("delete",type,null,id); } };
   $("#fSave").onclick = ()=>{
     const out = {};
@@ -258,15 +325,16 @@ function openForm(type, id, preset){
     hideModal();
     if(id && type==="events" && item.recurring){
       ask("Change repeating event", "Change just this one, or every repeat? (For every repeat, the title, place and notes change; times for all repeats are changed in Google Calendar.)", [{label:"Just this one", value:"this"},{label:"All repeats", value:"all"}])
-        .then(scope=>{ if(scope) op("update",type,out,id,{scope}); });
+        .then(scope=>{ if(scope) op("update",type,out,id,{scope}); else backToDay(); });
       return;
     }
     if(id) op("update",type,out,id); else op("add",type,out);
   };
 }
 function guessCat(name){ const n=String(name).toLowerCase(); for(const c of Object.keys(CAT_WORDS)){ if(CAT_WORDS[c].some(w=>n.includes(w))) return c; } return "Other"; }
-function showModal(h){ $("#sheet").innerHTML=h; $("#modal").classList.remove("hidden"); }
-function hideModal(){ $("#modal").classList.add("hidden"); }
+let modalKind = "";
+function showModal(h, kind){ $("#sheet").innerHTML=h; $("#modal").classList.remove("hidden"); modalKind = kind||"other"; }
+function hideModal(closeDay){ $("#modal").classList.add("hidden"); modalKind=""; if(closeDay) modalDay=null; }
 
 /* ---------- settings ---------- */
 function openSettings(){
@@ -308,15 +376,16 @@ function submitPin(){ const p=$("#pinInput").value.trim(); if(!p) return; prefs.
 /* ---------- events ---------- */
 function bind(){
   document.addEventListener("click", e=>{
-    const t = e.target.closest("[data-toggle],[data-del],[data-edit],[data-quick],[data-day],[data-addday],[data-filter],[data-mealshop]");
-    if(!t) { if(e.target.id==="modal") hideModal(); return; }
+    const t = e.target.closest("[data-swdel],[data-toggle],[data-del],[data-edit],[data-quick],[data-day],[data-addday],[data-filter],[data-mealshop]");
+    if(!t) { if(e.target.id==="modal") hideModal(true); return; }
+    if(t.dataset.swdel){ swipeDelete(t.dataset.swdel, t.dataset.id); return; }
     if(t.dataset.toggle){ op("toggle", t.dataset.toggle, null, t.dataset.id); }
     else if(t.dataset.del){ if(t.dataset.del==="events") deleteEvent(t.dataset.id); else if(confirm("Remove this?")) op("delete", t.dataset.del, null, t.dataset.id); }
     else if(t.dataset.edit){ openForm(t.dataset.edit, t.dataset.id); }
     else if(t.dataset.quick){ const q=t.dataset.quick; const map={event:"events",shopping:"shopping",todo:"todos",meal:"meals",note:"notes",trip:"trips"};
       const preset = q==="event"?{date:selDay}: q==="todo"?{assignee:prefs.me||""}: q==="shopping"?{category:"Other"}:{};
       openForm(map[q], null, preset); }
-    else if(t.dataset.day){ selDay=t.dataset.day; renderCalendar(); }
+    else if(t.dataset.day){ openDaySheet(t.dataset.day); }
     else if(t.dataset.addday){ openForm("events", null, {date:t.dataset.addday}); }
     else if(t.dataset.filter){ prefs.todoFilter=t.dataset.filter; savePrefs(); renderTodos(); }
     else if(t.dataset.mealshop){ const m=data.meals.find(x=>String(x.id)===t.dataset.mealshop); if(!m) return;
@@ -334,7 +403,7 @@ function bind(){
   $("#settingsBtn").onclick=openSettings;
   $("#refreshBtn").onclick=()=>{ lastSync=null; load(); toast("Refreshing…"); };
   $("#pinGo").onclick=submitPin; $("#pinInput").addEventListener("keydown",e=>{ if(e.key==="Enter") submitPin(); });
-  document.addEventListener("keydown", e=>{ if(e.key==="Escape") hideModal(); });
+  document.addEventListener("keydown", e=>{ if(e.key==="Escape") hideModal(true); });
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && live()) load(); });
 }
 function tick(){ const n=new Date(); $("#clock").innerHTML = n.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})+"<br>"+n.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }
@@ -344,7 +413,7 @@ async function setupKiosk(){
 }
 let lastDay = todayStr();
 function start(){
-  bind(); tick(); setInterval(tick, 15000);
+  bind(); bindSwipe(); tick(); setInterval(tick, 15000);
   load(); setupKiosk();
   setInterval(()=>{
     if(!$("#modal").classList.contains("hidden")) return;
