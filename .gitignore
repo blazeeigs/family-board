@@ -1,0 +1,4 @@
+private/
+screens/
+.venv/
+*.local.json

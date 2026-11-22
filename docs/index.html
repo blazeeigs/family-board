@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#c2643b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Family Board">
+<title>Family Board</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+<div id="pinScreen" class="hidden">
+  <div class="box">
+    <h1>🏡 Family Board</h1>
+    <div>Enter the family PIN</div>
+    <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" maxlength="12">
+    <div>Who's this?</div>
+    <div class="who" id="pinWho"></div>
+    <p><button class="btn" id="pinGo" style="background:#fff;color:#c2643b;margin-top:14px">Open the board</button></p>
+    <p id="pinErr" class="hidden" style="background:rgba(0,0,0,.25);padding:6px;border-radius:8px"></p>
+  </div>
+</div>
+
+<header class="top">
+  <h1 id="title">🏡 Family Board</h1>
+  <div class="clock" id="clock"></div>
+  <button id="refreshBtn" title="Refresh" aria-label="Refresh">⟳</button>
+  <button id="settingsBtn" title="Settings" aria-label="Settings">⚙︎</button>
+</header>
+<div id="banner" class="banner hidden"></div>
+
+<nav class="quick">
+  <button data-quick="event"><span>📅</span>Event</button>
+  <button data-quick="shopping"><span>🛒</span>Shopping</button>
+  <button data-quick="todo"><span>✅</span>To-do</button>
+  <button data-quick="meal"><span>🍛</span>Meal</button>
+  <button data-quick="note"><span>📝</span>Note</button>
+</nav>
+
+<main>
+  <details class="card" id="sec-agenda" open>
+    <summary><span class="ico">⏰</span><h2>Coming up</h2><span class="count" id="cnt-agenda"></span></summary>
+    <div class="body"><ul class="list" id="agenda"></ul></div>
+  </details>
+
+  <details class="card wide" id="sec-calendar" open>
+    <summary><span class="ico">📅</span><h2>Calendar</h2></summary>
+    <div class="body">
+      <div class="calnav">
+        <button class="btn ghost small" id="calPrev">‹</button>
+        <h3 id="calTitle"></h3>
+        <button class="btn ghost small" id="calToday">Today</button>
+        <button class="btn ghost small" id="calNext">›</button>
+      </div>
+      <div class="grid" id="calGrid"></div>
+      <div class="dayevents" id="dayEvents"></div>
+    </div>
+  </details>
+
+  <details class="card" id="sec-shopping" open>
+    <summary><span class="ico">🛒</span><h2>Shopping list</h2><span class="count" id="cnt-shopping"></span></summary>
+    <div class="body">
+      <div class="addrow"><input id="shopQuick" placeholder="Add an item, e.g. Milk"><button class="btn" id="shopAdd">Add</button></div>
+      <div id="shopping"></div>
+      <div class="row" style="margin-top:10px"><button class="btn ghost small" id="shopClear">Clear ticked items</button>
+      <span class="sub">Fridge photo? Send it to Grok Bot and it'll add what's running low.</span></div>
+    </div>
+  </details>
+
+  <details class="card" id="sec-todos" open>
+    <summary><span class="ico">✅</span><h2>To-dos &amp; chores</h2><span class="count" id="cnt-todos"></span></summary>
+    <div class="body">
+      <div class="filters" id="todoFilters"></div>
+      <ul class="list" id="todos"></ul>
+      <div class="addrow"><input id="todoQuick" placeholder="Add a to-do"><button class="btn" id="todoAdd">Add</button></div>
+    </div>
+  </details>
+
+  <details class="card" id="sec-meals" open>
+    <summary><span class="ico">🍛</span><h2>Meal plan</h2><span class="count" id="cnt-meals"></span></summary>
+    <div class="body"><div id="meals"></div></div>
+  </details>
+
+  <details class="card" id="sec-trips">
+    <summary><span class="ico">✈️</span><h2>Trips</h2><span class="count" id="cnt-trips"></span></summary>
+    <div class="body"><ul class="list" id="trips"></ul>
+      <div class="row" style="margin-top:8px"><button class="btn ghost small" data-quick="trip">+ Add a trip</button></div></div>
+  </details>
+
+  <details class="card" id="sec-notes" open>
+    <summary><span class="ico">📝</span><h2>Notes &amp; messages</h2><span class="count" id="cnt-notes"></span></summary>
+    <div class="body">
+      <div class="addrow"><input id="noteQuick" placeholder="Leave a message for everyone"><button class="btn" id="noteAdd">Post</button></div>
+      <div id="notes"></div>
+    </div>
+  </details>
+</main>
+<footer class="foot" id="foot"></footer>
+
+<div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
+<script src="config.js?v=2"></script>
+<script src="demo-data.js?v=2"></script>
+<script src="app.js?v=2"></script>
+</body>
+</html>

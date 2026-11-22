@@ -1,0 +1,327 @@
+/* Family Board family board. Static front end; data lives in a Google Sheet via Apps Script, or in this device's storage in demo mode. */
+(function(){
+"use strict";
+const CFG = window.FAMILY_BOARD_CONFIG || {};
+const TYPES = ["events","shopping","todos","meals","trips","notes"];
+const CATS = ["Meat & fish","Fruit & veg","Dairy & eggs","Bakery","Store cupboard","Herbs & spices","Frozen","Drinks","Household","Toiletries","Other"];
+const CAT_WORDS = {
+  "Meat & fish":["chicken","beef","lamb","pork","mince","steak","bacon","sausage","fish","salmon","cod","prawn","ham","turkey"],
+  "Fruit & veg":["potato","onion","garlic","ginger","tomato","cucumber","spinach","cauliflower","chilli","coriander","mint","lettuce","carrot","apple","banana","lemon","lime","pepper","broccoli","mushroom","fruit","veg","berries","grape","orange","avocado","pomegranate"],
+  "Dairy & eggs":["milk","yoghurt","yogurt","cheese","butter","cream","egg","ghee","paneer"],
+  "Bakery":["bread","naan","roll","wrap","bagel","croissant","cake"],
+  "Herbs & spices":["cumin","turmeric","garam","masala","paprika","cardamom","clove","cinnamon","spice","fenugreek","methi","mustard seed","salt","pepper corn","star anise","asafoetida","hing"],
+  "Store cupboard":["rice","pasta","flour","oil","sugar","tin","beans","lentil","stock","sauce","vinegar","purée","puree","cereal","tea","coffee","honey","jam"],
+  "Frozen":["frozen","ice cream","peas"],
+  "Drinks":["juice","squash","beer","wine","water","cola","lemonade"],
+  "Household":["washing","bin bag","foil","cling","kitchen roll","cleaner","bleach","sponge","dishwasher","detergent","battery","bulb"],
+  "Toiletries":["shampoo","toothpaste","soap","deodorant","tissues","toilet roll","razor","conditioner"]
+};
+const $ = (s,el=document)=>el.querySelector(s);
+const $$ = (s,el=document)=>Array.from(el.querySelectorAll(s));
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const pad = n => String(n).padStart(2,"0");
+const ymd = d => d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+const todayStr = () => ymd(new Date());
+const parseYmd = s => { const [y,m,d]=String(s).split("-").map(Number); return new Date(y,(m||1)-1,d||1); };
+const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const fmtTime = t => { if(!t) return ""; const [h,m]=t.split(":").map(Number); const ap=h>=12?"pm":"am"; const hh=((h+11)%12)+1; return hh+(m?":"+pad(m):"")+ap; };
+const fmtDate = s => { if(!s) return ""; const d=parseYmd(s); return DOW[d.getDay()]+" "+d.getDate()+" "+MON[d.getMonth()]+(d.getFullYear()!==new Date().getFullYear()?" "+d.getFullYear():""); };
+
+/* ---------- device prefs ---------- */
+const PREF_KEY="sl_prefs", DATA_KEY="sl_demo_data", CACHE_KEY="sl_cache";
+let prefs = Object.assign({apiUrl:"", pin:"", me:"", kiosk:false, todoFilter:"All"}, JSON.parse(localStorage.getItem(PREF_KEY)||"{}"));
+const savePrefs = ()=>localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+const qs = new URLSearchParams(location.search);
+if(qs.has("kiosk")) { prefs.kiosk = qs.get("kiosk")!=="0"; savePrefs(); }
+const apiUrl = () => (prefs.apiUrl || CFG.apiUrl || "").trim();
+const live = () => !!apiUrl();
+
+/* ---------- state ---------- */
+let data = {settings:{}, events:[], shopping:[], todos:[], meals:[], trips:[], notes:[]};
+let calCursor = new Date(); calCursor.setDate(1);
+let selDay = todayStr();
+let lastSync = null, busy = false;
+
+function members(){ const m=(data.settings&&data.settings.members)||[]; return Array.isArray(m)&&m.length?m:["Person 1","Person 2","Person 3"]; }
+function memberColour(name){ const i=members().indexOf(name); return ["var(--p1)","var(--p2)","var(--p3)"][i] || "var(--p0)"; }
+function chip(name){ return name?`<span class="chip" style="background:${memberColour(name)}">${esc(name)}</span>`:""; }
+
+/* ---------- storage backends ---------- */
+function normalise(d){
+  const out = {settings:Object.assign({}, d.settings||{})};
+  TYPES.forEach(t=>{ out[t] = Array.isArray(d[t])? d[t].map(x=>Object.assign({},x)) : []; });
+  out.meals.forEach(m=>{ if(typeof m.recipes==="string"){ try{ m.recipes=JSON.parse(m.recipes||"[]"); }catch(e){ m.recipes=[]; } } if(!Array.isArray(m.recipes)) m.recipes=[]; });
+  ["shopping","todos"].forEach(t=>out[t].forEach(x=>x.done = x.done===true||x.done==="TRUE"||x.done==="true"));
+  out.notes.forEach(x=>x.pinned = x.pinned===true||x.pinned==="TRUE"||x.pinned==="true");
+  if(typeof out.settings.members==="string"){ out.settings.members = out.settings.members.split(",").map(s=>s.trim()).filter(Boolean); }
+  return out;
+}
+const Local = {
+  load(){ const raw=localStorage.getItem(DATA_KEY); data = normalise(raw?JSON.parse(raw):window.FAMILY_BOARD_DEMO()); this.save(); },
+  save(){ localStorage.setItem(DATA_KEY, JSON.stringify(data)); }
+};
+async function api(action, payload){
+  const url = apiUrl();
+  if(action==="all"){
+    const r = await fetch(url+(url.includes("?")?"&":"?")+"action=all&pin="+encodeURIComponent(prefs.pin)+"&t="+Date.now(), {method:"GET", redirect:"follow"});
+    return r.json();
+  }
+  const r = await fetch(url, {method:"POST", redirect:"follow", headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body: JSON.stringify(Object.assign({action, pin:prefs.pin, by:prefs.me}, payload||{}))});
+  return r.json();
+}
+
+async function load(){
+  if(!live()){ Local.load(); setBanner("Demo mode: changes are saved on this device only. Open ⚙︎ Settings to connect the family Google Sheet."); render(); return; }
+  if(!prefs.pin){ showPin(); return; }
+  if(busy) return; busy=true;
+  try{
+    const res = await api("all");
+    if(!res.ok){ if(res.error==="bad_pin"||res.error==="locked"){ prefs.pin=""; savePrefs(); showPin(res.error==="locked"?"Too many wrong tries. Wait 10 minutes and try again.":"That PIN didn't work."); return; } throw new Error(res.error||"Error"); }
+    data = normalise(res.data); lastSync = new Date();
+    localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+    setBanner(res.warning?("Note: "+res.warning):"");
+  }catch(e){
+    const c = localStorage.getItem(CACHE_KEY);
+    if(c && !lastSync) data = normalise(JSON.parse(c));
+    setBanner("Can't reach the family sheet right now, so this is the last saved copy. ("+esc(e.message)+")", true);
+  }finally{ busy=false; }
+  render();
+}
+
+async function op(action, type, item, id){
+  // optimistic local change
+  const list = data[type];
+  if(action==="add"){ item.id = item.id||uid(); item.by = item.by||prefs.me||""; item.createdAt=new Date().toISOString(); list.push(item); }
+  else { const i=list.findIndex(x=>String(x.id)===String(id)); if(i<0) return;
+    if(action==="delete") list.splice(i,1);
+    else if(action==="toggle"){ const k = type==="notes"?"pinned":"done"; list[i][k]=!list[i][k]; }
+    else if(action==="update") Object.assign(list[i], item);
+  }
+  render();
+  if(!live()){ Local.save(); return; }
+  try{
+    const res = await api(action, {type, item, id});
+    if(!res.ok) throw new Error(res.error||"Save failed");
+    if(action==="add" && res.item){ const k=list.findIndex(x=>x.id===item.id); if(k>=0) list[k]=normalise({[type]:[res.item]})[type][0]; }
+    toast("Saved");
+  }catch(e){ toast("Couldn't save: "+e.message); }
+  load();
+}
+
+/* ---------- render ---------- */
+function setBanner(msg, err){ const b=$("#banner"); if(!msg){ b.classList.add("hidden"); return; } b.innerHTML=msg; b.classList.toggle("err",!!err); b.classList.remove("hidden"); }
+function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),2200); }
+
+function render(){
+  const title = (data.settings&&data.settings.title)||"Family Board";
+  $("#title").textContent = "🏡 "+title; document.title = title;
+  document.body.classList.toggle("kiosk", !!prefs.kiosk);
+  renderAgenda(); renderCalendar(); renderShopping(); renderTodos(); renderMeals(); renderTrips(); renderNotes();
+  $("#foot").textContent = (live()? "Connected to the family sheet" + (lastSync?" · updated "+lastSync.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}):"") : "Demo mode") + (prefs.me?" · you are "+prefs.me:"");
+}
+
+function eventsSorted(){ return data.events.slice().sort((a,b)=>(a.date+(a.time||"00:00")).localeCompare(b.date+(b.time||"00:00"))); }
+function eventLine(e){
+  const when = e.time ? fmtTime(e.time)+(e.end?"–"+fmtTime(e.end):"") : (e.endDate&&e.endDate!==e.date?"Until "+fmtDate(e.endDate):"All day");
+  return `<div class="grow"><div><b>${esc(e.title)}</b></div><div class="sub">${esc(when)}${e.location?" · "+esc(e.location):""}</div>${e.notes?`<div class="sub">${esc(e.notes)}</div>`:""}</div>`;
+}
+function renderAgenda(){
+  const t = todayStr();
+  const up = eventsSorted().filter(e=>(e.endDate||e.date)>=t).slice(0,12);
+  const trips = data.trips.filter(x=>x.status!=="Done");
+  let h = up.map(e=>{ const d=parseYmd(e.date);
+    return `<li class="${e.date===t?"today":""}" data-edit="events" data-id="${esc(e.id)}"><div class="datebox"><small>${DOW[d.getDay()]}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></div>${eventLine(e)}</li>`; }).join("");
+  h += trips.map(x=>`<li data-edit="trips" data-id="${esc(x.id)}"><div class="datebox"><small>Trip</small><b>✈️</b><small>&nbsp;</small></div><div class="grow"><b>${esc(x.name)}</b><div class="sub">${esc(x.when)}${x.details?" · "+esc(x.details):""}</div></div></li>`).join("");
+  $("#agenda").innerHTML = h || `<li class="empty">Nothing coming up.</li>`;
+  $("#cnt-agenda").textContent = up.length||"";
+}
+function renderCalendar(){
+  const y=calCursor.getFullYear(), m=calCursor.getMonth();
+  $("#calTitle").textContent = MONTHS[m]+" "+y;
+  const first = new Date(y,m,1); const offset=(first.getDay()+6)%7; // Monday first
+  const start = new Date(y,m,1-offset);
+  const byDay = {};
+  data.events.forEach(e=>{ let d=parseYmd(e.date); const end=parseYmd(e.endDate||e.date); let n=0; while(d<=end && n<62){ (byDay[ymd(d)]=byDay[ymd(d)]||[]).push(e); d.setDate(d.getDate()+1); n++; } });
+  let h = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d=>`<div class="dow">${d}</div>`).join("");
+  const t=todayStr();
+  for(let i=0;i<42;i++){ const d=new Date(start); d.setDate(start.getDate()+i); const k=ymd(d); const ev=byDay[k]||[];
+    if(i>=35 && d.getMonth()!==m) break;
+    h += `<div class="day ${d.getMonth()!==m?"other":""} ${k===t?"is-today":""} ${k===selDay?"sel":""}" data-day="${k}"><div class="n">${d.getDate()}</div><div class="dots">${ev.slice(0,4).map(()=>"<i></i>").join("")}</div>${ev.slice(0,3).map(e=>`<div class="lbl">${e.time?fmtTime(e.time)+" ":""}${esc(e.title)}</div>`).join("")}${ev.length>3?`<div class="lbl">+${ev.length-3} more</div>`:""}</div>`;
+  }
+  $("#calGrid").innerHTML = h;
+  const sel = (byDay[selDay]||[]).slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+  $("#dayEvents").innerHTML = `<div class="cat">${esc(fmtDate(selDay))}</div><ul class="list">${sel.map(e=>`<li data-edit="events" data-id="${esc(e.id)}">${eventLine(e)}</li>`).join("")||'<li class="empty">Nothing on this day.</li>'}</ul><div class="row" style="margin-top:6px"><button class="btn ghost small" data-addday="${selDay}">+ Add event on this day</button></div>`;
+}
+function renderShopping(){
+  const groups = {};
+  data.shopping.forEach(s=>{ const c=CATS.includes(s.category)?s.category:"Other"; (groups[c]=groups[c]||[]).push(s); });
+  let h="";
+  CATS.forEach(c=>{ const g=groups[c]; if(!g) return; g.sort((a,b)=>(a.done-b.done)||String(a.item).localeCompare(String(b.item)));
+    h+=`<div class="cat">${esc(c)}</div><ul class="list">`+g.map(s=>`<li class="${s.done?"done":""}"><button class="tick ${s.done?"on":""}" data-toggle="shopping" data-id="${esc(s.id)}" aria-label="Tick">${s.done?"✓":""}</button><div class="grow" data-edit="shopping" data-id="${esc(s.id)}">${esc(s.item)}${s.qty?` <span class="sub">· ${esc(s.qty)}</span>`:""}${s.note?`<div class="sub">${esc(s.note)}</div>`:""}</div>${s.by?chip(s.by):""}<button class="x" data-del="shopping" data-id="${esc(s.id)}" aria-label="Remove">×</button></li>`).join("")+`</ul>`; });
+  $("#shopping").innerHTML = h || `<div class="empty">The list is empty.</div>`;
+  $("#cnt-shopping").textContent = data.shopping.filter(s=>!s.done).length||"";
+}
+function renderTodos(){
+  const f = prefs.todoFilter||"All";
+  $("#todoFilters").innerHTML = ["All",...members(),"Done"].map(x=>`<button class="${x===f?"on":""}" data-filter="${esc(x)}">${esc(x)}</button>`).join("");
+  let list = data.todos.slice();
+  if(f==="Done") list=list.filter(x=>x.done); else { list=list.filter(x=>!x.done); if(f!=="All") list=list.filter(x=>x.assignee===f||x.assignee==="Everyone"); }
+  list.sort((a,b)=>(a.due||"9999").localeCompare(b.due||"9999"));
+  const t=todayStr();
+  $("#todos").innerHTML = list.map(x=>`<li class="${x.done?"done":""}"><button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub">${x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date"}</div></div>${chip(x.assignee)}<button class="x" data-del="todos" data-id="${esc(x.id)}">×</button></li>`).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
+  $("#cnt-todos").textContent = data.todos.filter(x=>!x.done).length||"";
+}
+function renderMeals(){
+  const t=todayStr();
+  const list = data.meals.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  const upcoming = list.filter(m=>!m.date||m.date>=t), past=list.filter(m=>m.date&&m.date<t).reverse().slice(0,3);
+  const one = m => `<div class="meal"><div class="row"><h3 class="grow" data-edit="meals" data-id="${esc(m.id)}">${esc(m.title)}</h3><button class="x" data-del="meals" data-id="${esc(m.id)}">×</button></div>
+    <div class="sub">${m.date?esc(fmtDate(m.date)):"Any day"}${m.serves?" · serves "+esc(m.serves):""}</div>${m.notes?`<div style="margin:4px 0">${esc(m.notes)}</div>`:""}
+    ${m.recipes.map(r=>`<details class="recipe"><summary>${esc(r.name)}</summary>${r.by?`<div class="sub">${esc(r.by)}${r.serves?" · recipe serves "+esc(r.serves):""}</div>`:""}${r.ingredients&&r.ingredients.length?`<ul>${r.ingredients.map(i=>`<li>${esc(i)}</li>`).join("")}</ul>`:""}${r.note?`<div class="sub">${esc(r.note)}</div>`:""}${r.url?`<p><a href="${esc(r.url)}" target="_blank" rel="noopener">Open the full recipe ↗</a></p>`:""}</details>`).join("")}
+    ${m.recipes.some(r=>r.ingredients&&r.ingredients.length)?`<button class="btn ghost small" data-mealshop="${esc(m.id)}">🛒 Add ingredients to shopping</button>`:""}</div>`;
+  $("#meals").innerHTML = (upcoming.map(one).join("") || `<div class="empty">No meals planned.</div>`) + (past.length?`<div class="cat">Recent</div>`+past.map(one).join(""):"");
+  $("#cnt-meals").textContent = upcoming.length||"";
+}
+function renderTrips(){
+  $("#trips").innerHTML = data.trips.map(x=>`<li><div class="grow" data-edit="trips" data-id="${esc(x.id)}"><b>${esc(x.name)}</b> <span class="sub">${esc(x.status||"")}</span><div class="sub">${esc(x.when)}</div>${x.details?`<div>${esc(x.details)}</div>`:""}</div><button class="x" data-del="trips" data-id="${esc(x.id)}">×</button></li>`).join("") || `<li class="empty">No trips yet.</li>`;
+  $("#cnt-trips").textContent = data.trips.length||"";
+}
+function renderNotes(){
+  const list = data.notes.slice().sort((a,b)=>(b.pinned-a.pinned)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+  $("#notes").innerHTML = list.map(n=>`<div class="note ${n.pinned?"pinned":""}"><div style="display:flex;gap:6px"><div class="grow" data-edit="notes" data-id="${esc(n.id)}">${esc(n.text)}</div><button class="x" data-toggle="notes" data-id="${esc(n.id)}" title="Pin">${n.pinned?"📌":"📍"}</button><button class="x" data-del="notes" data-id="${esc(n.id)}">×</button></div><div class="meta">${n.by?esc(n.by)+" · ":""}${n.createdAt?new Date(n.createdAt).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):""}</div></div>`).join("") || `<div class="empty">No messages.</div>`;
+  $("#cnt-notes").textContent = data.notes.length||"";
+}
+
+/* ---------- forms ---------- */
+const FORMS = {
+  events: { title:"Event", fields:[["title","What","text"],["date","Date","date"],["time","Start time (blank = all day)","time"],["end","End time","time"],["location","Where","text"],["notes","Notes","textarea"]] },
+  shopping: { title:"Shopping item", fields:[["item","Item","text"],["qty","Quantity","text"],["category","Aisle","select",CATS],["note","Note","text"]] },
+  todos: { title:"To-do", fields:[["task","Task","text"],["assignee","Who","select",()=>["",...members(),"Everyone"]],["due","Due","date"]] },
+  meals: { title:"Meal", fields:[["title","Meal","text"],["date","Date","date"],["serves","Serves","text"],["notes","Notes","textarea"],["recipesText","Recipes (one per line: name | link)","textarea"]] },
+  trips: { title:"Trip", fields:[["name","Trip","text"],["when","When","text"],["status","Status","select",["Idea","Planning","Booked","Done"]],["details","Details","textarea"]] },
+  notes: { title:"Message", fields:[["text","Message","textarea"]] }
+};
+function openForm(type, id, preset){
+  const def = FORMS[type]; const item = id ? data[type].find(x=>String(x.id)===String(id)) : Object.assign({}, preset||{});
+  if(!item) return;
+  const v = Object.assign({}, item);
+  if(type==="meals") v.recipesText = (item.recipes||[]).map(r=>r.name+(r.url?" | "+r.url:"")).join("\n");
+  let h = `<h2>${id?"Edit":"Add"} ${def.title.toLowerCase()}</h2>`;
+  if(type==="events" && live()) h += `<div class="sub">Saved straight to the shared Google calendar.</div>`;
+  def.fields.forEach(([k,label,kind,opts])=>{ const val=v[k]==null?"":v[k];
+    h += `<label for="f_${k}">${esc(label)}</label>`;
+    if(kind==="textarea") h+=`<textarea id="f_${k}">${esc(val)}</textarea>`;
+    else if(kind==="select"){ const o=typeof opts==="function"?opts():opts; h+=`<select id="f_${k}">${o.map(x=>`<option ${x===val?"selected":""}>${esc(x)}</option>`).join("")}</select>`; }
+    else h+=`<input id="f_${k}" type="${kind}" value="${esc(val)}">`;
+  });
+  h += `<div class="actions">${id?`<button class="btn ghost" id="fDel" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" id="fCancel">Cancel</button><button class="btn" id="fSave">Save</button></div>`;
+  showModal(h);
+  const first=$("#sheet input,#sheet textarea"); if(first && !id) first.focus();
+  $("#fCancel").onclick = hideModal;
+  if(id) $("#fDel").onclick = ()=>{ if(confirm("Delete this?")){ hideModal(); op("delete",type,null,id); } };
+  $("#fSave").onclick = ()=>{
+    const out = {};
+    def.fields.forEach(([k])=>{ out[k] = $("#f_"+k).value.trim(); });
+    const main = def.fields[0][0]; if(!out[main]){ $("#f_"+main).focus(); return; }
+    if(type==="events" && !out.date){ $("#f_date").focus(); return; }
+    if(type==="shopping" && !id && out.category==="Other") out.category = guessCat(out.item);
+    if(type==="meals"){ const old=item.recipes||[]; out.recipes = out.recipesText.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{ const [n,u]=l.split("|").map(s=>s.trim()); const prev=old.find(r=>r.name===n)||{}; return Object.assign({}, prev, {name:n, url:u||prev.url||""}); }); delete out.recipesText; }
+    hideModal();
+    if(id) op("update",type,out,id); else op("add",type,out);
+  };
+}
+function guessCat(name){ const n=String(name).toLowerCase(); for(const c of Object.keys(CAT_WORDS)){ if(CAT_WORDS[c].some(w=>n.includes(w))) return c; } return "Other"; }
+function showModal(h){ $("#sheet").innerHTML=h; $("#modal").classList.remove("hidden"); }
+function hideModal(){ $("#modal").classList.add("hidden"); }
+
+/* ---------- settings ---------- */
+function openSettings(){
+  const h = `<h2>Settings</h2>
+  <label>Who's using this device?</label><select id="sMe">${["",...members()].map(m=>`<option ${m===prefs.me?"selected":""}>${esc(m)}</option>`).join("")}</select>
+  <label>Family sheet web app URL (from Apps Script)</label><input id="sUrl" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(prefs.apiUrl)}">
+  <div class="sub">${CFG.apiUrl?"A default URL is built in; leave blank to use it.":"Leave blank to stay in demo mode."}</div>
+  <label>Family PIN</label><input id="sPin" type="password" inputmode="numeric" value="${esc(prefs.pin)}">
+  <label><input type="checkbox" id="sKiosk" style="width:auto" ${prefs.kiosk?"checked":""}> Kitchen screen mode (bigger text, keeps the screen awake)</label>
+  <label>Import data (JSON)</label><textarea id="sImport" placeholder='{"events":[…],"shopping":[…]}'></textarea>
+  <div class="row" style="margin-top:6px"><input type="file" id="sFile" accept=".json,application/json" style="flex:1"><button class="btn ghost small" id="sDoImport">Import</button><button class="btn ghost small" id="sExport">Export</button></div>
+  <div class="sub">${live()?"Import adds the items to the family sheet (events go into the Google calendar, skipping any already there).":"In demo mode, import replaces the sample data on this device."}</div>
+  ${!live()?`<div class="row" style="margin-top:6px"><button class="btn ghost small" id="sReset">Reset demo data</button></div>`:""}
+  <div class="actions"><button class="btn ghost" id="sCancel">Close</button><button class="btn" id="sSave">Save</button></div>`;
+  showModal(h);
+  $("#sCancel").onclick=hideModal;
+  $("#sSave").onclick=()=>{ prefs.me=$("#sMe").value; prefs.apiUrl=$("#sUrl").value.trim(); prefs.pin=$("#sPin").value.trim(); prefs.kiosk=$("#sKiosk").checked; savePrefs(); hideModal(); lastSync=null; load(); setupKiosk(); };
+  $("#sFile").onchange=async e=>{ const f=e.target.files[0]; if(f) $("#sImport").value = await f.text(); };
+  $("#sExport").onclick=()=>{ const b=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="family-board-export.json"; a.click(); };
+  if($("#sReset")) $("#sReset").onclick=()=>{ if(confirm("Reset to the sample data?")){ localStorage.removeItem(DATA_KEY); hideModal(); load(); } };
+  $("#sDoImport").onclick=async ()=>{
+    let obj; try{ obj=JSON.parse($("#sImport").value); }catch(e){ toast("That isn't valid JSON"); return; }
+    if(!live()){ data = normalise(Object.assign({settings:data.settings}, obj)); Local.save(); hideModal(); render(); toast("Imported"); return; }
+    try{ toast("Importing…"); const res=await api("import",{data:obj}); if(!res.ok) throw new Error(res.error); hideModal(); toast("Imported: "+JSON.stringify(res.counts)); load(); }catch(e){ toast("Import failed: "+e.message); }
+  };
+}
+
+/* ---------- PIN ---------- */
+function showPin(err){
+  const s=$("#pinScreen"); s.classList.remove("hidden");
+  const names = members();
+  $("#pinWho").innerHTML = names.map(n=>`<button class="${n===prefs.me?"on":""}" data-who="${esc(n)}">${esc(n)}</button>`).join("");
+  $$("#pinWho button").forEach(b=>b.onclick=()=>{ prefs.me=b.dataset.who; savePrefs(); $$("#pinWho button").forEach(x=>x.classList.toggle("on",x===b)); });
+  const e=$("#pinErr"); if(err){ e.textContent=err; e.classList.remove("hidden"); } else e.classList.add("hidden");
+  $("#pinInput").value=""; $("#pinInput").focus();
+}
+function submitPin(){ const p=$("#pinInput").value.trim(); if(!p) return; prefs.pin=p; savePrefs(); $("#pinScreen").classList.add("hidden"); load(); }
+
+/* ---------- events ---------- */
+function bind(){
+  document.addEventListener("click", e=>{
+    const t = e.target.closest("[data-toggle],[data-del],[data-edit],[data-quick],[data-day],[data-addday],[data-filter],[data-mealshop]");
+    if(!t) { if(e.target.id==="modal") hideModal(); return; }
+    if(t.dataset.toggle){ op("toggle", t.dataset.toggle, null, t.dataset.id); }
+    else if(t.dataset.del){ if(confirm("Remove this?")) op("delete", t.dataset.del, null, t.dataset.id); }
+    else if(t.dataset.edit){ openForm(t.dataset.edit, t.dataset.id); }
+    else if(t.dataset.quick){ const q=t.dataset.quick; const map={event:"events",shopping:"shopping",todo:"todos",meal:"meals",note:"notes",trip:"trips"};
+      const preset = q==="event"?{date:selDay}: q==="todo"?{assignee:prefs.me||""}: q==="shopping"?{category:"Other"}:{};
+      openForm(map[q], null, preset); }
+    else if(t.dataset.day){ selDay=t.dataset.day; renderCalendar(); }
+    else if(t.dataset.addday){ openForm("events", null, {date:t.dataset.addday}); }
+    else if(t.dataset.filter){ prefs.todoFilter=t.dataset.filter; savePrefs(); renderTodos(); }
+    else if(t.dataset.mealshop){ const m=data.meals.find(x=>String(x.id)===t.dataset.mealshop); if(!m) return;
+      if(!confirm("Add every ingredient from these recipes to the shopping list? You can untick or remove what you already have.")) return;
+      m.recipes.forEach(r=>(r.ingredients||[]).forEach(i=>op("add","shopping",{item:i, qty:"", category:guessCat(i), note:"For "+m.title+": "+r.name, done:false}))); }
+  });
+  const quick = (inp, btn, fn) => { const go=()=>{ const v=$(inp).value.trim(); if(!v) return; fn(v); $(inp).value=""; }; $(btn).onclick=go; $(inp).addEventListener("keydown",e=>{ if(e.key==="Enter") go(); }); };
+  quick("#shopQuick","#shopAdd", v=>op("add","shopping",{item:v, qty:"", category:guessCat(v), done:false}));
+  quick("#todoQuick","#todoAdd", v=>op("add","todos",{task:v, assignee:(prefs.todoFilter&&members().includes(prefs.todoFilter))?prefs.todoFilter:"", due:"", done:false}));
+  quick("#noteQuick","#noteAdd", v=>op("add","notes",{text:v, pinned:false}));
+  $("#shopClear").onclick=()=>{ const done=data.shopping.filter(s=>s.done); if(!done.length) return; if(confirm("Remove "+done.length+" ticked item(s)?")) done.forEach(s=>op("delete","shopping",null,s.id)); };
+  $("#calPrev").onclick=()=>{ calCursor.setMonth(calCursor.getMonth()-1); renderCalendar(); };
+  $("#calNext").onclick=()=>{ calCursor.setMonth(calCursor.getMonth()+1); renderCalendar(); };
+  $("#calToday").onclick=()=>{ calCursor=new Date(); calCursor.setDate(1); selDay=todayStr(); renderCalendar(); };
+  $("#settingsBtn").onclick=openSettings;
+  $("#refreshBtn").onclick=()=>{ lastSync=null; load(); toast("Refreshing…"); };
+  $("#pinGo").onclick=submitPin; $("#pinInput").addEventListener("keydown",e=>{ if(e.key==="Enter") submitPin(); });
+  document.addEventListener("keydown", e=>{ if(e.key==="Escape") hideModal(); });
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && live()) load(); });
+}
+function tick(){ const n=new Date(); $("#clock").innerHTML = n.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})+"<br>"+n.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }
+let wakeLock=null;
+async function setupKiosk(){
+  if(prefs.kiosk){ $$("details.card").forEach(d=>d.open=true); try{ if("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); }catch(e){} }
+}
+let lastDay = todayStr();
+function start(){
+  bind(); tick(); setInterval(tick, 15000);
+  load(); setupKiosk();
+  setInterval(()=>{
+    if(!$("#modal").classList.contains("hidden")) return;
+    if(todayStr()!==lastDay){ lastDay=todayStr(); selDay=lastDay; calCursor=new Date(); calCursor.setDate(1); }
+    if(live()) load(); else render();
+  }, Math.max(20, CFG.refreshSeconds||60)*1000);
+  if("serviceWorker" in navigator && location.protocol==="https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
+start();
+})();
