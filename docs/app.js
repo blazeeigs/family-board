@@ -45,7 +45,12 @@ let calCursor = new Date(); calCursor.setDate(1);
 let selDay = todayStr();
 let lastSync = null, busy = false;
 
-function members(){ const m=(data.settings&&data.settings.members)||[]; return Array.isArray(m)&&m.length?m:["Person 1","Person 2","Person 3"]; }
+function realMembers(){
+  let m=(data.settings&&data.settings.members)||[];
+  if(!(Array.isArray(m)&&m.length)){ try{ const c=JSON.parse(localStorage.getItem(CACHE_KEY)||"null"); m=normalise(c||{}).settings.members||[]; }catch(e){ m=[]; } }
+  return Array.isArray(m)?m:[];
+}
+function members(){ const m=realMembers(); return m.length?m:(live()?[]:["Person 1","Person 2","Person 3"]); }
 function memberColour(name){ const i=members().indexOf(name); return ["var(--p1)","var(--p2)","var(--p3)"][i] || "var(--p0)"; }
 function chip(name){ return name?`<span class="chip" style="background:${memberColour(name)}">${esc(name)}</span>`:""; }
 
@@ -90,6 +95,12 @@ async function load(){
     setBanner("Can't reach the family sheet right now, so this is the last saved copy. ("+esc(e.message)+")", true);
   }finally{ busy=false; }
   render();
+  if(live() && lastSync && !prefs.me && realMembers().length && !modalKind) askWho();
+}
+function askWho(){
+  showModal(`<h2>Who's using this device?</h2><div class="who" id="askWho">${realMembers().map(n=>`<button class="btn" data-who="${esc(n)}" style="margin:4px">${esc(n)}</button>`).join("")}</div>
+  <div class="sub">You can change this later in ⚙︎ Settings.</div>`, "who");
+  $$("#askWho button").forEach(b=>b.onclick=()=>{ prefs.me=b.dataset.who; savePrefs(); hideModal(); render(); toast("Hi "+prefs.me); });
 }
 
 async function op(action, type, item, id, extra){
@@ -365,7 +376,8 @@ function openSettings(){
 /* ---------- PIN ---------- */
 function showPin(err){
   const s=$("#pinScreen"); s.classList.remove("hidden");
-  const names = members();
+  const names = live()?realMembers():members();
+  $("#pinWhoLabel").classList.toggle("hidden", !names.length); $("#pinWho").classList.toggle("hidden", !names.length);
   $("#pinWho").innerHTML = names.map(n=>`<button class="${n===prefs.me?"on":""}" data-who="${esc(n)}">${esc(n)}</button>`).join("");
   $$("#pinWho button").forEach(b=>b.onclick=()=>{ prefs.me=b.dataset.who; savePrefs(); $$("#pinWho button").forEach(x=>x.classList.toggle("on",x===b)); });
   const e=$("#pinErr"); if(err){ e.textContent=err; e.classList.remove("hidden"); } else e.classList.add("hidden");

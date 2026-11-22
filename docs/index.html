@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 <div id="pinScreen" class="hidden">
@@ -21,7 +21,7 @@
     <h1>🏡 Family Board</h1>
     <div>Enter the family PIN</div>
     <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" maxlength="12">
-    <div>Who's this?</div>
+    <div id="pinWhoLabel">Who's this?</div>
     <div class="who" id="pinWho"></div>
     <p><button class="btn" id="pinGo" style="background:#fff;color:#c2643b;margin-top:14px">Open the board</button></p>
     <p id="pinErr" class="hidden" style="background:rgba(0,0,0,.25);padding:6px;border-radius:8px"></p>
@@ -105,8 +105,8 @@
 <footer class="foot" id="foot"></footer>
 
 <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
-<script src="config.js?v=4"></script>
-<script src="demo-data.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="config.js?v=5"></script>
+<script src="demo-data.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
