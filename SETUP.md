@@ -15,6 +15,7 @@ In **Project Settings > Script properties**, add:
 | Property | Value |
 |---|---|
 | `PIN` | the family PIN (numbers are easiest on a tablet) |
+| `SHEET_ID` | only if the script is standalone: the Sheet id from its URL |
 | `CALENDAR_ID` | the shared calendar's id (Google Calendar > the calendar's **Settings and sharing** > **Integrate calendar** > Calendar ID) |
 
 Without `CALENDAR_ID`, events are stored in the Sheet's Events tab instead of Google Calendar.

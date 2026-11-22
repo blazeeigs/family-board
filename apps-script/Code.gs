@@ -31,7 +31,7 @@ var CAL_PAST_DAYS = 45, CAL_FUTURE_DAYS = 400;
 
 /* ---------------- one-off setup (run from the editor) ---------------- */
 function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSS_();
   Object.keys(SCHEMA).forEach(function (name) {
     var sh = ss.getSheetByName(name) || ss.insertSheet(name);
     var cols = SCHEMA[name];
@@ -374,7 +374,7 @@ function findRow_(sh, id) {
 }
 
 function sheet_(name) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSS_();
   var sh = ss.getSheetByName(name);
   if (!sh) { setup(); sh = ss.getSheetByName(name); }
   return sh;
@@ -384,4 +384,11 @@ function tz_() { return Session.getScriptTimeZone() || 'Europe/London'; }
 
 function json_(o) {
   return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
+
+
+// Works bound to a Sheet or standalone (set Script property SHEET_ID).
+function getSS_() {
+  var id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
+  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
 }
