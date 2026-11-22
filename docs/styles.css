@@ -146,3 +146,6 @@ body.kiosk header.top .clock{font-size:1.4rem}
 
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:999px;z-index:70;font-size:.9rem;max-width:90vw}
 footer.foot{text-align:center;color:var(--muted);font-size:.8rem;padding:10px}
+.choices{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.choices .btn{padding:14px;font-size:1.05rem;width:100%}
+.btn.danger{background:#b23a2b}

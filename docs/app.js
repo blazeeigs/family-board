@@ -92,20 +92,24 @@ async function load(){
   render();
 }
 
-async function op(action, type, item, id){
+async function op(action, type, item, id, extra){
   // optimistic local change
   const list = data[type];
   if(action==="add"){ item.id = item.id||uid(); item.by = item.by||prefs.me||""; item.createdAt=new Date().toISOString(); list.push(item); }
   else { const i=list.findIndex(x=>String(x.id)===String(id)); if(i<0) return;
-    if(action==="delete") list.splice(i,1);
+    if(action==="delete"){
+      if(type==="events" && extra && extra.scope==="all" && list[i].recurring){ const base=seriesKey(list[i].id); for(let k=list.length-1;k>=0;k--) if(seriesKey(list[k].id)===base) list.splice(k,1); }
+      else list.splice(i,1);
+    }
     else if(action==="toggle"){ const k = type==="notes"?"pinned":"done"; list[i][k]=!list[i][k]; }
     else if(action==="update") Object.assign(list[i], item);
   }
   render();
   if(!live()){ Local.save(); return; }
   try{
-    const res = await api(action, {type, item, id});
+    const res = await api(action, Object.assign({type, item, id}, extra||{}));
     if(!res.ok) throw new Error(res.error||"Save failed");
+    if(res.warning){ toast(res.warning, 6000); load(); return; }
     if(action==="add" && res.item){ const k=list.findIndex(x=>x.id===item.id); if(k>=0) list[k]=normalise({[type]:[res.item]})[type][0]; }
     toast("Saved");
   }catch(e){ toast("Couldn't save: "+e.message); }
@@ -114,7 +118,27 @@ async function op(action, type, item, id){
 
 /* ---------- render ---------- */
 function setBanner(msg, err){ const b=$("#banner"); if(!msg){ b.classList.add("hidden"); return; } b.innerHTML=msg; b.classList.toggle("err",!!err); b.classList.remove("hidden"); }
-function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),2200); }
+function toast(msg, ms){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), ms||2200); }
+const seriesKey = id => String(id).replace(/[#@]\d{10,}$/,"");
+/* Touch-friendly choice sheet. Resolves with the chosen value, or null if cancelled. */
+function ask(title, text, choices){
+  return new Promise(resolve=>{
+    showModal(`<h2>${esc(title)}</h2>${text?`<p class="sub" style="font-size:.95rem">${esc(text)}</p>`:""}<div class="choices">${choices.map((c,i)=>`<button class="btn ${c.ghost?"ghost":""} ${c.danger?"danger":""}" data-choice="${i}">${esc(c.label)}</button>`).join("")}<button class="btn ghost" data-choice="-1">Cancel</button></div>`);
+    $$("#sheet [data-choice]").forEach(b=>b.onclick=ev=>{ ev.stopPropagation(); const i=Number(b.dataset.choice); hideModal(); resolve(i<0?null:choices[i].value); });
+  });
+}
+async function deleteEvent(id){
+  const e = data.events.find(x=>String(x.id)===String(id)); if(!e) return;
+  let scope = "this";
+  if(e.recurring){
+    scope = await ask("Delete repeating event", "“"+e.title+"” repeats. Delete just this one, or every repeat?", [{label:"Just this one", value:"this", danger:true},{label:"All repeats", value:"all", danger:true}]);
+    if(!scope) return;
+  } else {
+    const ok = await ask("Delete event?", "“"+e.title+"” on "+fmtDate(e.date)+(live()?" will be removed from the shared Google calendar for everyone.":"."), [{label:"Delete", value:"yes", danger:true}]);
+    if(!ok) return;
+  }
+  op("delete","events",null,id,{scope});
+}
 
 function render(){
   const title = (data.settings&&data.settings.title)||"Family Board";
@@ -127,14 +151,15 @@ function render(){
 function eventsSorted(){ return data.events.slice().sort((a,b)=>(a.date+(a.time||"00:00")).localeCompare(b.date+(b.time||"00:00"))); }
 function eventLine(e){
   const when = e.time ? fmtTime(e.time)+(e.end?"–"+fmtTime(e.end):"") : (e.endDate&&e.endDate!==e.date?"Until "+fmtDate(e.endDate):"All day");
-  return `<div class="grow"><div><b>${esc(e.title)}</b></div><div class="sub">${esc(when)}${e.location?" · "+esc(e.location):""}</div>${e.notes?`<div class="sub">${esc(e.notes)}</div>`:""}</div>`;
+  return `<div class="grow"><div><b>${esc(e.title)}</b>${e.recurring?` <span class="sub" title="Repeats">🔁</span>`:""}</div><div class="sub">${esc(when)}${e.location?" · "+esc(e.location):""}</div>${e.notes?`<div class="sub">${esc(e.notes)}</div>`:""}</div>`;
 }
+const evDel = e => `<button class="x" data-del="events" data-id="${esc(e.id)}" aria-label="Delete event" title="Delete">×</button>`;
 function renderAgenda(){
   const t = todayStr();
   const up = eventsSorted().filter(e=>(e.endDate||e.date)>=t).slice(0,12);
   const trips = data.trips.filter(x=>x.status!=="Done");
   let h = up.map(e=>{ const d=parseYmd(e.date);
-    return `<li class="${e.date===t?"today":""}" data-edit="events" data-id="${esc(e.id)}"><div class="datebox"><small>${DOW[d.getDay()]}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></div>${eventLine(e)}</li>`; }).join("");
+    return `<li class="${e.date===t?"today":""}" data-edit="events" data-id="${esc(e.id)}"><div class="datebox"><small>${DOW[d.getDay()]}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></div>${eventLine(e)}${evDel(e)}</li>`; }).join("");
   h += trips.map(x=>`<li data-edit="trips" data-id="${esc(x.id)}"><div class="datebox"><small>Trip</small><b>✈️</b><small>&nbsp;</small></div><div class="grow"><b>${esc(x.name)}</b><div class="sub">${esc(x.when)}${x.details?" · "+esc(x.details):""}</div></div></li>`).join("");
   $("#agenda").innerHTML = h || `<li class="empty">Nothing coming up.</li>`;
   $("#cnt-agenda").textContent = up.length||"";
@@ -154,7 +179,7 @@ function renderCalendar(){
   }
   $("#calGrid").innerHTML = h;
   const sel = (byDay[selDay]||[]).slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
-  $("#dayEvents").innerHTML = `<div class="cat">${esc(fmtDate(selDay))}</div><ul class="list">${sel.map(e=>`<li data-edit="events" data-id="${esc(e.id)}">${eventLine(e)}</li>`).join("")||'<li class="empty">Nothing on this day.</li>'}</ul><div class="row" style="margin-top:6px"><button class="btn ghost small" data-addday="${selDay}">+ Add event on this day</button></div>`;
+  $("#dayEvents").innerHTML = `<div class="cat">${esc(fmtDate(selDay))}</div><ul class="list">${sel.map(e=>`<li data-edit="events" data-id="${esc(e.id)}">${eventLine(e)}${evDel(e)}</li>`).join("")||'<li class="empty">Nothing on this day.</li>'}</ul><div class="row" style="margin-top:6px"><button class="btn ghost small" data-addday="${selDay}">+ Add event on this day</button></div>`;
 }
 function renderShopping(){
   const groups = {};
@@ -211,7 +236,7 @@ function openForm(type, id, preset){
   const v = Object.assign({}, item);
   if(type==="meals") v.recipesText = (item.recipes||[]).map(r=>r.name+(r.url?" | "+r.url:"")).join("\n");
   let h = `<h2>${id?"Edit":"Add"} ${def.title.toLowerCase()}</h2>`;
-  if(type==="events" && live()) h += `<div class="sub">Saved straight to the shared Google calendar.</div>`;
+  if(type==="events" && live()) h += `<div class="sub">Saved straight to the shared Google calendar.${item.recurring?" 🔁 This event repeats; you'll be asked whether to change just this one or all repeats.":""}</div>`;
   def.fields.forEach(([k,label,kind,opts])=>{ const val=v[k]==null?"":v[k];
     h += `<label for="f_${k}">${esc(label)}</label>`;
     if(kind==="textarea") h+=`<textarea id="f_${k}">${esc(val)}</textarea>`;
@@ -222,7 +247,7 @@ function openForm(type, id, preset){
   showModal(h);
   const first=$("#sheet input,#sheet textarea"); if(first && !id) first.focus();
   $("#fCancel").onclick = hideModal;
-  if(id) $("#fDel").onclick = ()=>{ if(confirm("Delete this?")){ hideModal(); op("delete",type,null,id); } };
+  if(id) $("#fDel").onclick = ()=>{ if(type==="events"){ hideModal(); deleteEvent(id); return; } if(confirm("Delete this?")){ hideModal(); op("delete",type,null,id); } };
   $("#fSave").onclick = ()=>{
     const out = {};
     def.fields.forEach(([k])=>{ out[k] = $("#f_"+k).value.trim(); });
@@ -231,6 +256,11 @@ function openForm(type, id, preset){
     if(type==="shopping" && !id && out.category==="Other") out.category = guessCat(out.item);
     if(type==="meals"){ const old=item.recipes||[]; out.recipes = out.recipesText.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{ const [n,u]=l.split("|").map(s=>s.trim()); const prev=old.find(r=>r.name===n)||{}; return Object.assign({}, prev, {name:n, url:u||prev.url||""}); }); delete out.recipesText; }
     hideModal();
+    if(id && type==="events" && item.recurring){
+      ask("Change repeating event", "Change just this one, or every repeat? (For every repeat, the title, place and notes change; times for all repeats are changed in Google Calendar.)", [{label:"Just this one", value:"this"},{label:"All repeats", value:"all"}])
+        .then(scope=>{ if(scope) op("update",type,out,id,{scope}); });
+      return;
+    }
     if(id) op("update",type,out,id); else op("add",type,out);
   };
 }
@@ -281,7 +311,7 @@ function bind(){
     const t = e.target.closest("[data-toggle],[data-del],[data-edit],[data-quick],[data-day],[data-addday],[data-filter],[data-mealshop]");
     if(!t) { if(e.target.id==="modal") hideModal(); return; }
     if(t.dataset.toggle){ op("toggle", t.dataset.toggle, null, t.dataset.id); }
-    else if(t.dataset.del){ if(confirm("Remove this?")) op("delete", t.dataset.del, null, t.dataset.id); }
+    else if(t.dataset.del){ if(t.dataset.del==="events") deleteEvent(t.dataset.id); else if(confirm("Remove this?")) op("delete", t.dataset.del, null, t.dataset.id); }
     else if(t.dataset.edit){ openForm(t.dataset.edit, t.dataset.id); }
     else if(t.dataset.quick){ const q=t.dataset.quick; const map={event:"events",shopping:"shopping",todo:"todos",meal:"meals",note:"notes",trip:"trips"};
       const preset = q==="event"?{date:selDay}: q==="todo"?{assignee:prefs.me||""}: q==="shopping"?{category:"Other"}:{};
