@@ -23,6 +23,13 @@ const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const pad = n => String(n).padStart(2,"0");
 const ymd = d => d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
 const todayStr = () => ymd(new Date());
+/* repeating chores */
+const DAYS = ["Sundays","Mondays","Tuesdays","Wednesdays","Thursdays","Fridays","Saturdays"];
+const REPEATS = ["","Every day","Weekdays","Weekends",...DAYS.slice(1),DAYS[0]];
+function repeatsOn(rep, d){ const w=d.getDay(); if(rep==="Every day") return true; if(rep==="Weekdays") return w>0&&w<6; if(rep==="Weekends") return w===0||w===6; return DAYS.indexOf(rep)===w; }
+function nextRepeat(rep){ const d=new Date(); for(let i=0;i<8;i++){ if(repeatsOn(rep,d)) return d; d.setDate(d.getDate()+1); } return null; }
+function todoDone(x){ return x.repeat ? String(x.doneOn||"")===todayStr() : !!x.done; }
+function todoDueToday(x){ return !x.repeat || repeatsOn(x.repeat, new Date()); }
 const parseYmd = s => { const [y,m,d]=String(s).split("-").map(Number); return new Date(y,(m||1)-1,d||1); };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -112,7 +119,10 @@ async function op(action, type, item, id, extra){
       if(type==="events" && extra && extra.scope==="all" && list[i].recurring){ const base=seriesKey(list[i].id); for(let k=list.length-1;k>=0;k--) if(seriesKey(list[k].id)===base) list.splice(k,1); }
       else list.splice(i,1);
     }
-    else if(action==="toggle"){ const k = type==="notes"?"pinned":"done"; list[i][k]=!list[i][k]; }
+    else if(action==="toggle"){
+      if(type==="todos" && list[i].repeat){ list[i].doneOn = todoDone(list[i]) ? "" : todayStr(); list[i].done = todoDone(list[i]); }
+      else { const k = type==="notes"?"pinned":"done"; list[i][k]=!list[i][k]; }
+    }
     else if(action==="update") Object.assign(list[i], item);
   }
   render();
@@ -210,12 +220,19 @@ function renderShopping(){
 function renderTodos(){
   const f = prefs.todoFilter||"All";
   $("#todoFilters").innerHTML = ["All",...members(),"Done"].map(x=>`<button class="${x===f?"on":""}" data-filter="${esc(x)}">${esc(x)}</button>`).join("");
+  data.todos.forEach(x=>x.done=todoDone(x));
   let list = data.todos.slice();
   if(f==="Done") list=list.filter(x=>x.done); else { list=list.filter(x=>!x.done); if(f!=="All") list=list.filter(x=>x.assignee===f||x.assignee==="Everyone"); }
-  list.sort((a,b)=>(a.due||"9999").localeCompare(b.due||"9999"));
+  const key=x=> (todoDueToday(x)?"0":"1") + (x.repeat? (x.repeat==="Every day"||!x.due?"0000":"") : (x.due||"9999"));
+  list.sort((a,b)=>key(a).localeCompare(key(b)));
   const t=todayStr();
-  $("#todos").innerHTML = list.map(x=>swRow("todos", x.id, `<button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub">${x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date"}</div></div>${chip(x.assignee)}`, x.done?"done":"", false)).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
-  $("#cnt-todos").textContent = data.todos.filter(x=>!x.done).length||"";
+  const sub=x=>{
+    if(x.repeat){ const today=todoDueToday(x); const n=today?null:nextRepeat(x.repeat);
+      return "🔁 "+esc(x.repeat)+(x.done?" · done today":today?" · today":n?" · next "+esc(fmtDate(ymd(n))):""); }
+    return x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date";
+  };
+  $("#todos").innerHTML = list.map(x=>swRow("todos", x.id, `<button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub">${sub(x)}</div></div>${chip(x.assignee)}`, (x.done?"done":"")+(!x.done&&!todoDueToday(x)?" later":""), false)).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
+  $("#cnt-todos").textContent = data.todos.filter(x=>!x.done&&todoDueToday(x)).length||"";
 }
 function renderMeals(){
   const t=todayStr();
@@ -303,7 +320,7 @@ function bindSwipe(){
 const FORMS = {
   events: { title:"Event", fields:[["title","What","text"],["date","Date","date"],["time","Start time (blank = all day)","time"],["end","End time","time"],["location","Where","text"],["notes","Notes","textarea"]] },
   shopping: { title:"Shopping item", fields:[["item","Item","text"],["qty","Quantity","text"],["category","Aisle","select",CATS],["note","Note","text"]] },
-  todos: { title:"To-do", fields:[["task","Task","text"],["assignee","Who","select",()=>["",...members(),"Everyone"]],["due","Due","date"]] },
+  todos: { title:"To-do", fields:[["task","Task","text"],["assignee","Who","select",()=>["",...members(),"Everyone"]],["due","Due","date"],["repeat","Repeats","select",REPEATS]] },
   meals: { title:"Meal", fields:[["title","Meal","text"],["date","Date","date"],["serves","Serves","text"],["notes","Notes","textarea"],["recipesText","Recipes (one per line: name | link)","textarea"]] },
   trips: { title:"Trip", fields:[["name","Trip","text"],["when","When","text"],["status","Status","select",["Idea","Planning","Booked","Done"]],["details","Details","textarea"]] },
   notes: { title:"Message", fields:[["text","Message","textarea"]] }

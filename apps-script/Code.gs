@@ -19,7 +19,7 @@
 var SCHEMA = {
   Events:   ['id','title','date','time','end','endDate','location','notes','by','createdAt','updatedAt'],
   Shopping: ['id','item','qty','category','note','by','done','createdAt','updatedAt'],
-  Todos:    ['id','task','assignee','due','done','by','createdAt','updatedAt'],
+  Todos:    ['id','task','assignee','due','done','by','createdAt','updatedAt','repeat','doneOn'],
   Meals:    ['id','date','title','serves','notes','recipes','by','createdAt','updatedAt'],
   Trips:    ['id','name','when','status','details','by','createdAt','updatedAt'],
   Notes:    ['id','text','pinned','by','createdAt','updatedAt'],
@@ -153,6 +153,7 @@ function readSheet_(name) {
     });
     if ('done' in o) o.done = o.done === true || String(o.done).toUpperCase() === 'TRUE';
     if ('pinned' in o) o.pinned = o.pinned === true || String(o.pinned).toUpperCase() === 'TRUE';
+    if (name === 'Todos' && o.repeat) o.done = String(o.doneOn || '') === Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
     if (name === 'Meals') { try { o.recipes = JSON.parse(o.recipes || '[]'); } catch (e) { o.recipes = []; } }
     return o;
   });
@@ -346,6 +347,17 @@ function toggle_(type, id) {
   var sh = sheet_(name);
   var r = findRow_(sh, id);
   if (!r) return { ok: false, error: 'not_found' };
+  if (name === 'Todos') {
+    var rc = SCHEMA[name].indexOf('repeat') + 1, dc = SCHEMA[name].indexOf('doneOn') + 1;
+    if (String(sh.getRange(r, rc).getValue() || '')) {
+      // Repeating chore: "done" means done today, so store the date it was last ticked.
+      var today = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
+      var was = String(sh.getRange(r, dc).getValue() || '') === today;
+      sh.getRange(r, dc).setNumberFormat('@').setValue(was ? '' : today);
+      sh.getRange(r, SCHEMA[name].indexOf('updatedAt') + 1).setValue(new Date().toISOString());
+      return { ok: true, value: !was, doneOn: was ? '' : today };
+    }
+  }
   var c = SCHEMA[name].indexOf(field) + 1;
   var cur = String(sh.getRange(r, c).getValue()).toUpperCase() === 'TRUE';
   sh.getRange(r, c).setValue(cur ? 'FALSE' : 'TRUE');
@@ -424,7 +436,24 @@ function sheet_(name) {
   var ss = getSS_();
   var sh = ss.getSheetByName(name);
   if (!sh) { setup(); sh = ss.getSheetByName(name); }
+  ensureHeader_(sh, name);
   return sh;
+}
+
+// Adds any new columns (from SCHEMA) to the end of an existing tab's header row. Existing data is untouched.
+var headerChecked_ = {};
+function ensureHeader_(sh, name) {
+  var cols = SCHEMA[name];
+  if (!cols || headerChecked_[name]) return;
+  headerChecked_[name] = true;
+  var have = sh.getRange(1, 1, 1, cols.length).getValues()[0];
+  for (var i = 0; i < cols.length; i++) {
+    if (String(have[i] || '') !== cols[i]) {
+      if (have[i]) return; // unexpected layout: leave it alone
+      sh.getRange(1, i + 1).setValue(cols[i]).setFontWeight('bold').setBackground('#f1e7da');
+      sh.getRange(2, i + 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
+    }
+  }
 }
 
 function tz_() { return Session.getScriptTimeZone() || 'Europe/London'; }

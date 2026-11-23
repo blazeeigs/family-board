@@ -166,3 +166,6 @@ ul.notes .meta{font-size:.75rem;color:var(--muted);margin-top:4px}
 .btn.big{width:100%;padding:14px;font-size:1.05rem}
 .grid .day{-webkit-user-select:none;user-select:none}
 .grid .day:active{background:#fbe6d9}
+
+/* repeating chores not due today */
+li.later .grow{opacity:.6}
