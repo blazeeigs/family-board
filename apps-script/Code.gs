@@ -19,7 +19,7 @@
 var SCHEMA = {
   Events:   ['id','title','date','time','end','endDate','location','notes','by','createdAt','updatedAt'],
   Shopping: ['id','item','qty','category','note','by','done','createdAt','updatedAt'],
-  Todos:    ['id','task','assignee','due','done','by','createdAt','updatedAt','repeat','doneOn'],
+  Todos:    ['id','task','assignee','due','done','by','createdAt','updatedAt','repeat','doneOn','history'],
   Meals:    ['id','date','title','serves','notes','recipes','by','createdAt','updatedAt'],
   Trips:    ['id','name','when','status','details','by','createdAt','updatedAt'],
   Notes:    ['id','text','pinned','by','createdAt','updatedAt'],
@@ -354,6 +354,11 @@ function toggle_(type, id) {
       var today = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
       var was = String(sh.getRange(r, dc).getValue() || '') === today;
       sh.getRange(r, dc).setNumberFormat('@').setValue(was ? '' : today);
+      // Keep a history of the days it was done (last 60), so missed days can be shown.
+      var hc = SCHEMA[name].indexOf('history') + 1;
+      var hist = String(sh.getRange(r, hc).getValue() || '').split(',').filter(String).filter(function (x) { return x !== today; });
+      if (!was) hist.push(today);
+      sh.getRange(r, hc).setNumberFormat('@').setValue(hist.sort().slice(-60).join(','));
       sh.getRange(r, SCHEMA[name].indexOf('updatedAt') + 1).setValue(new Date().toISOString());
       return { ok: true, value: !was, doneOn: was ? '' : today };
     }

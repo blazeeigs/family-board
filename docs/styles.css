@@ -169,3 +169,8 @@ ul.notes .meta{font-size:.75rem;color:var(--muted);margin-top:4px}
 
 /* repeating chores not due today */
 li.later .grow{opacity:.6}
+
+/* missed chores */
+.sub.missed{color:#b3261e}
+#todoFilters button.warn{color:#b3261e;border-color:#b3261e}
+#todoFilters button.warn.on{color:#fff;background:#b3261e;border-color:#b3261e}

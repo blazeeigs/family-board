@@ -29,6 +29,17 @@ const REPEATS = ["","Every day","Weekdays","Weekends",...DAYS.slice(1),DAYS[0]];
 function repeatsOn(rep, d){ const w=d.getDay(); if(rep==="Every day") return true; if(rep==="Weekdays") return w>0&&w<6; if(rep==="Weekends") return w===0||w===6; return DAYS.indexOf(rep)===w; }
 function nextRepeat(rep){ const d=new Date(); for(let i=0;i<8;i++){ if(repeatsOn(rep,d)) return d; d.setDate(d.getDate()+1); } return null; }
 function todoDone(x){ return x.repeat ? String(x.doneOn||"")===todayStr() : !!x.done; }
+function todoHistory(x){ return String(x.history||"").split(",").filter(Boolean); }
+// Days in the last 14 (not today) when a repeating chore was due but not ticked. Counts from the day after it was created.
+function missedDates(x){
+  if(!x.repeat) return [];
+  const hist=new Set(todoHistory(x)); const out=[]; const t=todayStr();
+  const start=new Date(); start.setDate(start.getDate()-14);
+  if(x.createdAt){ const c=new Date(x.createdAt); c.setDate(c.getDate()+1); c.setHours(0,0,0,0); if(c>start) start.setTime(c.getTime()); }
+  const d=new Date(start); d.setHours(12,0,0,0);
+  while(ymd(d)<t){ if(repeatsOn(x.repeat,d) && !hist.has(ymd(d))) out.push(ymd(d)); d.setDate(d.getDate()+1); }
+  return out;
+}
 function todoDueToday(x){ return !x.repeat || repeatsOn(x.repeat, new Date()); }
 const parseYmd = s => { const [y,m,d]=String(s).split("-").map(Number); return new Date(y,(m||1)-1,d||1); };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -120,7 +131,8 @@ async function op(action, type, item, id, extra){
       else list.splice(i,1);
     }
     else if(action==="toggle"){
-      if(type==="todos" && list[i].repeat){ list[i].doneOn = todoDone(list[i]) ? "" : todayStr(); list[i].done = todoDone(list[i]); }
+      if(type==="todos" && list[i].repeat){ const was=todoDone(list[i]), t=todayStr(); const h=todoHistory(list[i]).filter(x=>x!==t); if(!was) h.push(t);
+        list[i].history=h.sort().join(","); list[i].doneOn = was ? "" : t; list[i].done = todoDone(list[i]); }
       else { const k = type==="notes"?"pinned":"done"; list[i][k]=!list[i][k]; }
     }
     else if(action==="update") Object.assign(list[i], item);
@@ -219,8 +231,15 @@ function renderShopping(){
 }
 function renderTodos(){
   const f = prefs.todoFilter||"All";
-  $("#todoFilters").innerHTML = ["All",...members(),"Done"].map(x=>`<button class="${x===f?"on":""}" data-filter="${esc(x)}">${esc(x)}</button>`).join("");
   data.todos.forEach(x=>x.done=todoDone(x));
+  const missedN = data.todos.filter(x=>missedDates(x).length).length;
+  $("#todoFilters").innerHTML = ["All",...members(),"Done","Missed"].map(x=>`<button class="${x===f?"on":""}${x==="Missed"&&missedN?" warn":""}" data-filter="${esc(x)}">${esc(x)}${x==="Missed"&&missedN?" ("+missedN+")":""}</button>`).join("");
+  if(f==="Missed"){
+    const ml=data.todos.map(x=>({x,m:missedDates(x)})).filter(o=>o.m.length);
+    $("#todos").innerHTML = ml.map(({x,m})=>swRow("todos", x.id, `<button class="tick" data-caughtup="${esc(x.id)}" aria-label="Mark as caught up" title="Mark as caught up"></button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub missed">⚠️ Missed ${m.map(d=>esc(fmtDate(d))).join(", ")}</div></div>${chip(x.assignee)}`, "", false)).join("") || `<li class="empty">Nothing missed. 🎉</li>`;
+    $("#cnt-todos").textContent = data.todos.filter(x=>!x.done&&todoDueToday(x)).length||"";
+    return;
+  }
   let list = data.todos.slice();
   if(f==="Done") list=list.filter(x=>x.done); else { list=list.filter(x=>!x.done); if(f!=="All") list=list.filter(x=>x.assignee===f||x.assignee==="Everyone"); }
   const key=x=> (todoDueToday(x)?"0":"1") + (x.repeat? (x.repeat==="Every day"||!x.due?"0000":"") : (x.due||"9999"));
@@ -405,6 +424,8 @@ function submitPin(){ const p=$("#pinInput").value.trim(); if(!p) return; prefs.
 /* ---------- events ---------- */
 function bind(){
   document.addEventListener("click", e=>{
+    const cu = e.target.closest("[data-caughtup]");
+    if(cu){ const x=data.todos.find(y=>String(y.id)===cu.dataset.caughtup); if(x && confirm("Mark the missed days for \""+x.task+"\" as caught up?")){ const h=new Set(todoHistory(x)); missedDates(x).forEach(d=>h.add(d)); op("update","todos",{history:[...h].sort().slice(-60).join(",")},x.id); } return; }
     const t = e.target.closest("[data-swdel],[data-toggle],[data-del],[data-edit],[data-quick],[data-day],[data-addday],[data-filter],[data-mealshop]");
     if(!t) { if(e.target.id==="modal") hideModal(true); return; }
     if(t.dataset.swdel){ swipeDelete(t.dataset.swdel, t.dataset.id); return; }
