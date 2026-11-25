@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
 <div id="pinScreen" class="hidden">
@@ -45,12 +45,12 @@
 </nav>
 
 <main>
-  <details class="card" id="sec-agenda" open>
+  <details class="card" id="sec-agenda">
     <summary><span class="ico">⏰</span><h2>Coming up</h2><span class="count" id="cnt-agenda"></span></summary>
     <div class="body"><ul class="list" id="agenda"></ul><div class="hint">Tap to change, swipe right to delete. Tap any date on the calendar to see or add events.</div></div>
   </details>
 
-  <details class="card wide" id="sec-calendar" open>
+  <details class="card wide" id="sec-calendar">
     <summary><span class="ico">📅</span><h2>Calendar</h2></summary>
     <div class="body">
       <div class="calnav">
@@ -64,7 +64,7 @@
     </div>
   </details>
 
-  <details class="card" id="sec-shopping" open>
+  <details class="card" id="sec-shopping">
     <summary><span class="ico">🛒</span><h2>Shopping list</h2><span class="count" id="cnt-shopping"></span></summary>
     <div class="body">
       <div class="addrow"><input id="shopQuick" placeholder="Add an item, e.g. Milk"><button class="btn" id="shopAdd">Add</button></div>
@@ -74,7 +74,7 @@
     </div>
   </details>
 
-  <details class="card" id="sec-todos" open>
+  <details class="card" id="sec-todos">
     <summary><span class="ico">✅</span><h2>To-dos &amp; chores</h2><span class="count" id="cnt-todos"></span></summary>
     <div class="body">
       <div class="filters" id="todoFilters"></div>
@@ -83,7 +83,7 @@
     </div>
   </details>
 
-  <details class="card" id="sec-meals" open>
+  <details class="card" id="sec-meals">
     <summary><span class="ico">🍛</span><h2>Meal plan</h2><span class="count" id="cnt-meals"></span></summary>
     <div class="body"><div id="meals"></div></div>
   </details>
@@ -94,7 +94,7 @@
       <div class="row" style="margin-top:8px"><button class="btn ghost small" data-quick="trip">+ Add a trip</button></div></div>
   </details>
 
-  <details class="card" id="sec-notes" open>
+  <details class="card" id="sec-notes">
     <summary><span class="ico">📝</span><h2>Notes &amp; messages</h2><span class="count" id="cnt-notes"></span></summary>
     <div class="body">
       <div class="addrow"><input id="noteQuick" placeholder="Leave a message for everyone"><button class="btn" id="noteAdd">Post</button></div>
@@ -105,8 +105,8 @@
 <footer class="foot" id="foot"></footer>
 
 <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
-<script src="config.js?v=7"></script>
-<script src="demo-data.js?v=7"></script>
-<script src="app.js?v=7"></script>
+<script src="config.js?v=8"></script>
+<script src="demo-data.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

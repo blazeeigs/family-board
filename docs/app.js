@@ -459,7 +459,7 @@ function bind(){
 function tick(){ const n=new Date(); $("#clock").innerHTML = n.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})+"<br>"+n.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }
 let wakeLock=null;
 async function setupKiosk(){
-  if(prefs.kiosk){ $$("details.card").forEach(d=>d.open=true); try{ if("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); }catch(e){} }
+  if(prefs.kiosk){ try{ if("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); }catch(e){} }
 }
 let lastDay = todayStr();
 function start(){

@@ -1,6 +1,6 @@
 // Network-first app shell cache so the board still opens without signal. API calls (script.google.com) are never cached here.
-const C = "family-board-v7";
-const SHELL = ["./","index.html","styles.css?v=7","app.js?v=7","config.js?v=7","demo-data.js?v=7","manifest.webmanifest","icons/icon-192.png"];
+const C = "family-board-v8";
+const SHELL = ["./","index.html","styles.css?v=8","app.js?v=8","config.js?v=8","demo-data.js?v=8","manifest.webmanifest","icons/icon-192.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(C).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(k => Promise.all(k.filter(x => x !== C).map(x => caches.delete(x)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {
