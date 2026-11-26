@@ -97,23 +97,42 @@ async function api(action, payload){
   return r.json();
 }
 
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function paintCache(){
+  if(lastSync) return;
+  try{ const c=localStorage.getItem(CACHE_KEY); if(c){ data=normalise(JSON.parse(c)); render(); } }catch(e){}
+}
+let loadQueued=false;
 async function load(){
   if(!live()){ Local.load(); setBanner("Demo mode: changes are saved on this device only. Open ⚙︎ Settings to connect the family Google Sheet."); render(); return; }
   if(!prefs.pin){ showPin(); return; }
-  if(busy) return; busy=true;
+  if(busy){ loadQueued=true; return; }
+  busy=true; loadQueued=false;
+  paintCache();
+  const waits=[1000,3000,6000];
+  let err=null, ok=false;
   try{
-    const res = await api("all");
-    if(!res.ok){ if(res.error==="bad_pin"||res.error==="locked"){ prefs.pin=""; savePrefs(); showPin(res.error==="locked"?"Too many wrong tries. Wait 10 minutes and try again.":"That PIN didn't work."); return; } throw new Error(res.error||"Error"); }
-    data = normalise(res.data); lastSync = new Date();
-    localStorage.setItem(CACHE_KEY, JSON.stringify(data));
-    setBanner(res.warning?("Note: "+res.warning):"");
-  }catch(e){
-    const c = localStorage.getItem(CACHE_KEY);
-    if(c && !lastSync) data = normalise(JSON.parse(c));
-    setBanner("Can't reach the family sheet right now, so this is the last saved copy. ("+esc(e.message)+")", true);
-  }finally{ busy=false; }
-  render();
-  if(live() && lastSync && !prefs.me && realMembers().length && !modalKind) askWho();
+    for(let i=0; i<=waits.length && !ok; i++){
+      if(i) await sleep(waits[i-1]);
+      try{
+        const res = await api("all");
+        if(!res.ok){ if(res.error==="bad_pin"||res.error==="locked"){ prefs.pin=""; savePrefs(); showPin(res.error==="locked"?"Too many wrong tries. Wait 10 minutes and try again.":"That PIN didn't work."); return; } throw new Error(res.error||"Error"); }
+        data = normalise(res.data); lastSync = new Date();
+        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+        setBanner(res.warning?("Note: "+res.warning):"");
+        ok=true; err=null;
+      }catch(e){ err=e; }
+    }
+    if(!ok){
+      try{ const c=localStorage.getItem(CACHE_KEY); if(c && !lastSync) data=normalise(JSON.parse(c)); }catch(e){}
+      setBanner("Can't reach the family sheet just now, so this is the last saved copy. It should catch up on its own, or you can tap refresh.", true);
+    }
+  }finally{
+    busy=false;
+    render();
+    if(live() && lastSync && !prefs.me && realMembers().length && !modalKind) askWho();
+    if(loadQueued && prefs.pin){ loadQueued=false; load(); }
+  }
 }
 function askWho(){
   showModal(`<h2>Who's using this device?</h2><div class="who" id="askWho">${realMembers().map(n=>`<button class="btn" data-who="${esc(n)}" style="margin:4px">${esc(n)}</button>`).join("")}</div>
@@ -454,7 +473,10 @@ function bind(){
   $("#refreshBtn").onclick=()=>{ lastSync=null; load(); toast("Refreshing…"); };
   $("#pinGo").onclick=submitPin; $("#pinInput").addEventListener("keydown",e=>{ if(e.key==="Enter") submitPin(); });
   document.addEventListener("keydown", e=>{ if(e.key==="Escape") hideModal(true); });
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && live()) load(); });
+  const onResume=()=>{ if(!document.hidden && live()) load(); };
+  document.addEventListener("visibilitychange", onResume);
+  window.addEventListener("pageshow", onResume);
+  window.addEventListener("online", onResume);
 }
 function tick(){ const n=new Date(); $("#clock").innerHTML = n.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})+"<br>"+n.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }
 let wakeLock=null;
