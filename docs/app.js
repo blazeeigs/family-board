@@ -30,14 +30,27 @@ function repeatsOn(rep, d){ const w=d.getDay(); if(rep==="Every day") return tru
 function nextRepeat(rep){ const d=new Date(); for(let i=0;i<8;i++){ if(repeatsOn(rep,d)) return d; d.setDate(d.getDate()+1); } return null; }
 function todoDone(x){ return x.repeat ? String(x.doneOn||"")===todayStr() : !!x.done; }
 function todoHistory(x){ return String(x.history||"").split(",").filter(Boolean); }
-// Days in the last 14 (not today) when a repeating chore was due but not ticked. Counts from the day after it was created.
+// Look back 14 days, starting the day after the chore was created.
+function choreStart(x){
+  const start=new Date(); start.setDate(start.getDate()-14); start.setHours(0,0,0,0);
+  if(x.createdAt){ const c=new Date(x.createdAt); c.setDate(c.getDate()+1); c.setHours(0,0,0,0); if(c>start) start.setTime(c.getTime()); }
+  return start;
+}
+// Days in that window (not today) when a repeating chore was due but not ticked.
 function missedDates(x){
   if(!x.repeat) return [];
   const hist=new Set(todoHistory(x)); const out=[]; const t=todayStr();
-  const start=new Date(); start.setDate(start.getDate()-14);
-  if(x.createdAt){ const c=new Date(x.createdAt); c.setDate(c.getDate()+1); c.setHours(0,0,0,0); if(c>start) start.setTime(c.getTime()); }
-  const d=new Date(start); d.setHours(12,0,0,0);
+  const d=new Date(choreStart(x)); d.setHours(12,0,0,0);
   while(ymd(d)<t){ if(repeatsOn(x.repeat,d) && !hist.has(ymd(d))) out.push(ymd(d)); d.setDate(d.getDate()+1); }
+  return out;
+}
+// Days in that window (including today) when a repeating chore was ticked.
+function recentDoneDates(x){
+  if(!x.repeat) return [];
+  const hist=new Set(todoHistory(x)); if(x.doneOn) hist.add(String(x.doneOn));
+  const out=[]; const t=todayStr();
+  const d=new Date(choreStart(x)); d.setHours(12,0,0,0);
+  while(ymd(d)<=t){ const s=ymd(d); if(repeatsOn(x.repeat,d) && hist.has(s)) out.push(s); d.setDate(d.getDate()+1); }
   return out;
 }
 function todoDueToday(x){ return !x.repeat || repeatsOn(x.repeat, new Date()); }
@@ -259,17 +272,28 @@ function renderTodos(){
     $("#cnt-todos").textContent = data.todos.filter(x=>!x.done&&todoDueToday(x)).length||"";
     return;
   }
+  const t=todayStr();
   let list = data.todos.slice();
-  if(f==="Done") list=list.filter(x=>x.done); else { list=list.filter(x=>!x.done); if(f!=="All") list=list.filter(x=>x.assignee===f||x.assignee==="Everyone"); }
+  if(f==="Done") list=list.filter(x=>x.repeat ? (x.done || recentDoneDates(x).length) : x.done);
+  else { list=list.filter(x=>!x.done); if(f!=="All") list=list.filter(x=>x.assignee===f||x.assignee==="Everyone"); }
   const key=x=> (todoDueToday(x)?"0":"1") + (x.repeat? (x.repeat==="Every day"||!x.due?"0000":"") : (x.due||"9999"));
   list.sort((a,b)=>key(a).localeCompare(key(b)));
-  const t=todayStr();
   const sub=x=>{
-    if(x.repeat){ const today=todoDueToday(x); const n=today?null:nextRepeat(x.repeat);
-      return "🔁 "+esc(x.repeat)+(x.done?" · done today":today?" · today":n?" · next "+esc(fmtDate(ymd(n))):""); }
-    return x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date";
+    if(x.repeat){
+      const days=recentDoneDates(x), missed=missedDates(x);
+      const today=todoDueToday(x); const n=today?null:nextRepeat(x.repeat);
+      if(f==="Done" && days.length) return `<div class="sub">✅ Done ${days.map(d=>esc(d===t?"today":fmtDate(d))).join(", ")}</div>`;
+      const bits=["🔁 "+esc(x.repeat)];
+      if(x.done) bits.push("done today");
+      else if(today) bits.push("today");
+      else if(n) bits.push("next "+esc(fmtDate(ymd(n))));
+      let h=`<div class="sub">${bits.join(" · ")}</div>`;
+      if(missed.length) h+=`<div class="sub missed">⚠️ Missed ${missed.map(d=>esc(fmtDate(d))).join(", ")}</div>`;
+      return h;
+    }
+    return `<div class="sub">${x.due?(x.due<t&&!x.done?"⚠️ Overdue · ":"")+"Due "+esc(fmtDate(x.due)):"No due date"}</div>`;
   };
-  $("#todos").innerHTML = list.map(x=>swRow("todos", x.id, `<button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}<div class="sub">${sub(x)}</div></div>${chip(x.assignee)}`, (x.done?"done":"")+(!x.done&&!todoDueToday(x)?" later":""), false)).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
+  $("#todos").innerHTML = list.map(x=>swRow("todos", x.id, `<button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}${sub(x)}</div>${chip(x.assignee)}`, (x.done?"done":"")+(!x.done&&!todoDueToday(x)?" later":""), false)).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
   $("#cnt-todos").textContent = data.todos.filter(x=>!x.done&&todoDueToday(x)).length||"";
 }
 function renderMeals(){
