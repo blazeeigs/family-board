@@ -299,7 +299,7 @@ function renderShopping(){
   const groups = {};
   data.shopping.forEach(s=>{ const c=CATS.includes(s.category)?s.category:"Other"; (groups[c]=groups[c]||[]).push(s); });
   let h="";
-  CATS.forEach(c=>{ const g=groups[c]; if(!g) return; g.sort((a,b)=>(a.done-b.done)||String(a.item).localeCompare(String(b.item)));
+  CATS.forEach(c=>{ const g=groups[c]; if(!g) return; g.sort((a,b)=>String(a.item).localeCompare(String(b.item),"en-GB",{sensitivity:"base"})); // keep position when ticked, so the tick doesn't appear to jump to another row
     h+=`<div class="cat">${esc(c)}</div><ul class="list">`+g.map(s=>swRow("shopping", s.id, `<button class="tick ${s.done?"on":""}" data-toggle="shopping" data-id="${esc(s.id)}" aria-label="Tick">${s.done?"✓":""}</button><div class="grow" data-edit="shopping" data-id="${esc(s.id)}">${esc(s.item)}${s.qty?` <span class="sub">· ${esc(s.qty)}</span>`:""}${s.note?`<div class="sub">${esc(s.note)}</div>`:""}</div>${s.by?chip(s.by):""}`, s.done?"done":"", false)).join("")+`</ul>`; });
   $("#shopping").innerHTML = h || `<div class="empty">The list is empty.</div>`;
   $("#cnt-shopping").textContent = data.shopping.filter(s=>!s.done).length||"";
