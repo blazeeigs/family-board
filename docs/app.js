@@ -153,11 +153,11 @@ function askWho(){
   $$("#askWho button").forEach(b=>b.onclick=()=>{ prefs.me=b.dataset.who; savePrefs(); hideModal(); render(); toast("Hi "+prefs.me); });
 }
 
-async function op(action, type, item, id, extra){
+async function op(action, type, item, id, extra, opts){
   // optimistic local change
   const list = data[type];
-  if(action==="add"){ item.id = item.id||uid(); item.by = item.by||prefs.me||""; item.createdAt=new Date().toISOString(); list.push(item); }
-  else { const i=list.findIndex(x=>String(x.id)===String(id)); if(i<0) return;
+  if(action==="add"){ item.id = item.id||uid(); item.by = item.by||prefs.me||""; item.createdAt=item.createdAt||new Date().toISOString(); list.push(item); }
+  else { const i=list.findIndex(x=>String(x.id)===String(id)); if(i<0) return false;
     if(action==="delete"){
       if(type==="events" && extra && extra.scope==="all" && list[i].recurring){ const base=seriesKey(list[i].id); for(let k=list.length-1;k>=0;k--) if(seriesKey(list[k].id)===base) list.splice(k,1); }
       else list.splice(i,1);
@@ -170,39 +170,82 @@ async function op(action, type, item, id, extra){
     else if(action==="update") Object.assign(list[i], item);
   }
   render();
-  if(!live()){ Local.save(); return; }
+  if(!live()){ Local.save(); return true; }
   try{
     const res = await api(action, Object.assign({type, item, id}, extra||{}));
     if(!res.ok) throw new Error(res.error||"Save failed");
-    if(res.warning){ toast(res.warning, 6000); load(); return; }
+    if(res.warning){ toast(res.warning, 6000); load(); return true; }
     if(action==="add" && res.item){ const k=list.findIndex(x=>x.id===item.id); if(k>=0) list[k]=normalise({[type]:[res.item]})[type][0]; }
-    toast("Saved");
-  }catch(e){ toast("Couldn't save: "+e.message); }
+    if(!(opts&&opts.silent)) toast("Saved");
+  }catch(e){ toast("Couldn't save: "+e.message); load(); return false; }
   load();
+  return true;
 }
 
 /* ---------- render ---------- */
 function setBanner(msg, err){ const b=$("#banner"); if(!msg){ b.classList.add("hidden"); return; } b.innerHTML=msg; b.classList.toggle("err",!!err); b.classList.remove("hidden"); }
-function toast(msg, ms){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), ms||2200); }
+let toastTimer=null, toastEl=null;
+function clearToast(){ if(toastTimer){ clearTimeout(toastTimer); toastTimer=null; } if(toastEl){ toastEl.remove(); toastEl=null; } }
+function toast(msg, ms){ clearToast(); const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); toastEl=t; toastTimer=setTimeout(clearToast, ms||2200); }
+function toastUndo(msg, ms, onUndo){
+  clearToast();
+  const t=document.createElement("div"); t.className="toast"; t.setAttribute("role","status");
+  t.innerHTML = `${esc(msg)} <button type="button" class="undo">Undo</button>`;
+  t.querySelector(".undo").onclick = ev=>{ ev.preventDefault(); ev.stopPropagation(); clearToast(); onUndo(); };
+  document.body.appendChild(t); toastEl=t; toastTimer=setTimeout(clearToast, ms||6000);
+}
 const seriesKey = id => String(id).replace(/[#@]\d{10,}$/,"");
-/* Touch-friendly choice sheet. Resolves with the chosen value, or null if cancelled. */
-function ask(title, text, choices){
+const TYPE_PLACE = {meals:"from the meal plan", shopping:"from the shopping list", todos:"from the to-dos", notes:"from the notes", trips:"from the trips", events:""};
+function itemLabel(type, item){
+  if(!item) return "this";
+  const s = type==="meals"?item.title: type==="todos"?item.task: type==="shopping"?(item.item||"")+(item.qty?" ("+item.qty+")":""): type==="notes"?item.text: type==="trips"?item.name: type==="events"?item.title: "";
+  const n=String(s||"").trim()||"this";
+  return n.length>60?n.slice(0,57)+"…":n;
+}
+let askDone=null, prevFocus=null;
+function modalFocusables(){ return $$("#sheet button, #sheet input, #sheet select, #sheet textarea, #sheet a[href]").filter(el=>!el.disabled && el.tabIndex!==-1); }
+/* Touch-friendly choice sheet. Resolves with the chosen value, or null if cancelled (Keep it, tap outside, Escape). */
+function ask(title, text, choices, opts){
+  opts = opts||{};
   return new Promise(resolve=>{
-    showModal(`<h2>${esc(title)}</h2>${text?`<p class="sub" style="font-size:.95rem">${esc(text)}</p>`:""}<div class="choices">${choices.map((c,i)=>`<button class="btn ${c.ghost?"ghost":""} ${c.danger?"danger":""}" data-choice="${i}">${esc(c.label)}</button>`).join("")}<button class="btn ghost" data-choice="-1">Cancel</button></div>`);
-    $$("#sheet [data-choice]").forEach(b=>b.onclick=ev=>{ ev.stopPropagation(); const i=Number(b.dataset.choice); hideModal(); resolve(i<0?null:choices[i].value); });
+    if(askDone){ const r=askDone; askDone=null; r(null); }
+    askDone = resolve;
+    const cancel = opts.cancel===false?"":`<button class="btn ghost" data-choice="-1">${esc(opts.cancelLabel||"Cancel")}</button>`;
+    showModal(`<h2 id="askTitle">${esc(title)}</h2>${text?`<p class="sub" style="font-size:.95rem">${esc(text)}</p>`:""}<div class="choices">${choices.map((c,i)=>`<button class="btn ${c.ghost?"ghost":""} ${c.danger?"danger":""}" data-choice="${i}">${esc(c.label)}</button>`).join("")}${cancel}</div>`, "ask");
+    $$("#sheet [data-choice]").forEach(b=>b.onclick=ev=>{ ev.stopPropagation(); const i=Number(b.dataset.choice); settleAsk(i<0?null:choices[i].value); });
   });
+}
+function settleAsk(v){ const r=askDone; askDone=null; hideModal(); if(r) r(v); }
+function confirmRemove(type, item){
+  const name=itemLabel(type, item);
+  const place=TYPE_PLACE[type]||"";
+  const title = place?`Remove “${name}” ${place}?`:`Remove “${name}”?`;
+  return ask(title, "", [{label:"Remove", value:"yes", danger:true}], {cancelLabel:"Keep it"}).then(v=>v==="yes");
+}
+function offerUndo(type, snap){
+  const copy=JSON.parse(JSON.stringify(snap)); delete copy.id;
+  toastUndo("Removed “"+itemLabel(type, snap)+"”", 6000, ()=>{ op("add", type, copy, null, null, {silent:true}).then(ok=>{ if(ok!==false) toast("Restored “"+itemLabel(type, snap)+"”"); }); });
+}
+async function removeItem(type, id, opts){
+  const item=(data[type]||[]).find(x=>String(x.id)===String(id)); if(!item) return;
+  if(!(opts&&opts.confirmed) && !(await confirmRemove(type, item))) return;
+  const snap=JSON.parse(JSON.stringify(item));
+  const ok=await op("delete", type, null, id, null, {silent:true});
+  if(ok!==false) offerUndo(type, snap);
 }
 async function deleteEvent(id, noConfirm){
   const e = data.events.find(x=>String(x.id)===String(id)); if(!e) return;
   let scope = "this";
   if(e.recurring){
-    scope = await ask("Delete repeating event", "“"+e.title+"” repeats. Delete just this one, or every repeat?", [{label:"Just this one", value:"this", danger:true},{label:"All repeats", value:"all", danger:true}]);
+    scope = await ask("Delete repeating event", "“"+e.title+"” repeats. Delete just this one, or every repeat?", [{label:"Just this one", value:"this", danger:true},{label:"All repeats", value:"all", danger:true}], {cancelLabel:"Keep it"});
     if(!scope){ backToDay(); return; }
   } else if(!noConfirm){
-    const ok = await ask("Delete event?", "“"+e.title+"” on "+fmtDate(e.date)+(live()?" will be removed from the shared Google calendar for everyone.":"."), [{label:"Delete", value:"yes", danger:true}]);
+    const ok = await ask("Remove “"+e.title+"”?", "On "+fmtDate(e.date)+(live()?" this will be removed from the shared Google calendar for everyone.":"."), [{label:"Remove", value:"yes", danger:true}], {cancelLabel:"Keep it"});
     if(!ok){ backToDay(); return; }
   }
-  op("delete","events",null,id,{scope});
+  // Events are not undone here: a re-add can't safely restore a repeating series or a single occurrence.
+  const ok = await op("delete","events",null,id,{scope},{silent:true});
+  if(ok!==false) toast("Removed “"+e.title+"”", 4000);
 }
 
 function render(){
@@ -296,15 +339,24 @@ function renderTodos(){
   $("#todos").innerHTML = list.map(x=>swRow("todos", x.id, `<button class="tick ${x.done?"on":""}" data-toggle="todos" data-id="${esc(x.id)}">${x.done?"✓":""}</button><div class="grow" data-edit="todos" data-id="${esc(x.id)}">${esc(x.task)}${sub(x)}</div>${chip(x.assignee)}`, (x.done?"done":"")+(!x.done&&!todoDueToday(x)?" later":""), false)).join("") || `<li class="empty">${f==="Done"?"Nothing done yet.":"All clear!"}</li>`;
   $("#cnt-todos").textContent = data.todos.filter(x=>!x.done&&todoDueToday(x)).length||"";
 }
+function mealDate(m){ return String(m.date||"").slice(0,10); }
 function renderMeals(){
   const t=todayStr();
-  const list = data.meals.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
-  const upcoming = list.filter(m=>!m.date||m.date>=t), past=list.filter(m=>m.date&&m.date<t).reverse().slice(0,3);
-  const one = m => `<div class="meal"><div class="row"><h3 class="grow" data-edit="meals" data-id="${esc(m.id)}">${esc(m.title)}</h3><button class="x" data-del="meals" data-id="${esc(m.id)}">×</button></div>
-    <div class="sub">${m.date?esc(fmtDate(m.date)):"Any day"}${m.serves?" · serves "+esc(m.serves):""}</div>${m.notes?`<div style="margin:4px 0">${esc(m.notes)}</div>`:""}
-    ${m.recipes.map(r=>`<details class="recipe"><summary>${esc(r.name)}</summary>${r.by?`<div class="sub">${esc(r.by)}${r.serves?" · recipe serves "+esc(r.serves):""}</div>`:""}${r.ingredients&&r.ingredients.length?`<ul>${r.ingredients.map(i=>`<li>${esc(i)}</li>`).join("")}</ul>`:""}${r.note?`<div class="sub">${esc(r.note)}</div>`:""}${r.url?`<p><a href="${esc(r.url)}" target="_blank" rel="noopener">Open the full recipe ↗</a></p>`:""}</details>`).join("")}
-    ${m.recipes.some(r=>r.ingredients&&r.ingredients.length)?`<button class="btn ghost small" data-mealshop="${esc(m.id)}">🛒 Add ingredients to shopping</button>`:""}</div>`;
-  $("#meals").innerHTML = (upcoming.map(one).join("") || `<div class="empty">No meals planned.</div>`) + (past.length?`<div class="cat">Recent</div>`+past.map(one).join(""):"");
+  const horizon=new Date(); horizon.setDate(horizon.getDate()+14);
+  const laterFrom=ymd(horizon);
+  const list = data.meals.slice().sort((a,b)=>mealDate(a).localeCompare(mealDate(b)));
+  const upcoming = list.filter(m=>!mealDate(m)||mealDate(m)>=t);
+  const soon = upcoming.filter(m=>!mealDate(m)||mealDate(m)<=laterFrom);
+  const later = upcoming.filter(m=>mealDate(m)&&mealDate(m)>laterFrom);
+  const past=list.filter(m=>mealDate(m)&&mealDate(m)<t).reverse().slice(0,3);
+  const one = m => `<div class="meal"><div class="row"><h3 class="grow" data-edit="meals" data-id="${esc(m.id)}">${esc(m.title)}</h3><button class="x" data-del="meals" data-id="${esc(m.id)}" aria-label="Remove ${esc(m.title)}">×</button></div>
+    <div class="sub">${mealDate(m)?esc(fmtDate(mealDate(m))):"Any day"}${m.serves?" · serves "+esc(m.serves):""}</div>${m.notes?`<div style="margin:4px 0">${esc(m.notes)}</div>`:""}
+    ${(m.recipes||[]).map(r=>`<details class="recipe"><summary>${esc(r.name)}</summary>${r.by?`<div class="sub">${esc(r.by)}${r.serves?" · recipe serves "+esc(r.serves):""}</div>`:""}${r.ingredients&&r.ingredients.length?`<ul>${r.ingredients.map(i=>`<li>${esc(i)}</li>`).join("")}</ul>`:""}${r.note?`<div class="sub">${esc(r.note)}</div>`:""}${r.url?`<p><a href="${esc(r.url)}" target="_blank" rel="noopener">Open the full recipe ↗</a></p>`:""}</details>`).join("")}
+    ${(m.recipes||[]).some(r=>r.ingredients&&r.ingredients.length)?`<button class="btn ghost small" data-mealshop="${esc(m.id)}">🛒 Add ingredients to shopping</button>`:""}</div>`;
+  let h = soon.map(one).join("") || (later.length?"":`<div class="empty">No meals planned.</div>`);
+  if(later.length) h += `<div class="cat">Later</div>`+later.map(one).join("");
+  if(past.length) h += `<div class="cat">Recent</div>`+past.map(one).join("");
+  $("#meals").innerHTML = h;
   $("#cnt-meals").textContent = upcoming.length||"";
 }
 function renderTrips(){
@@ -340,7 +392,7 @@ function closeOpenRow(){ if(openRow){ openRow.classList.remove("open"); openRow 
 function swipeDelete(type, id){
   closeOpenRow();
   if(type==="events"){ deleteEvent(id, true); return; } // repeating events still ask "Just this one" / "All repeats"
-  op("delete", type, null, id);
+  removeItem(type, id, {confirmed:true});
 }
 function bindSwipe(){
   document.addEventListener("pointerdown", e=>{
@@ -404,7 +456,7 @@ function openForm(type, id, preset){
   showModal(h);
   const first=$("#sheet input,#sheet textarea"); if(first && !id) first.focus();
   $("#fCancel").onclick = ()=>{ hideModal(); backToDay(); };
-  if(id) $("#fDel").onclick = ()=>{ if(type==="events"){ hideModal(); deleteEvent(id); return; } if(confirm("Delete this?")){ hideModal(); op("delete",type,null,id); } };
+  if(id) $("#fDel").onclick = async ()=>{ if(type==="events"){ hideModal(); deleteEvent(id); return; } if(await confirmRemove(type, item)) removeItem(type, id, {confirmed:true}); };
   $("#fSave").onclick = ()=>{
     const out = {};
     def.fields.forEach(([k])=>{ out[k] = $("#f_"+k).value.trim(); });
@@ -423,8 +475,24 @@ function openForm(type, id, preset){
 }
 function guessCat(name){ const n=String(name).toLowerCase(); for(const c of Object.keys(CAT_WORDS)){ if(CAT_WORDS[c].some(w=>n.includes(w))) return c; } return "Other"; }
 let modalKind = "";
-function showModal(h, kind){ $("#sheet").innerHTML=h; $("#modal").classList.remove("hidden"); modalKind = kind||"other"; }
-function hideModal(closeDay){ $("#modal").classList.add("hidden"); modalKind=""; if(closeDay) modalDay=null; }
+function showModal(h, kind){
+  if(!prevFocus) prevFocus = document.activeElement;
+  $("#sheet").innerHTML=h; $("#modal").classList.remove("hidden"); modalKind = kind||"other";
+  const sheet=$("#sheet");
+  sheet.setAttribute("role","dialog"); sheet.setAttribute("aria-modal","true");
+  const heading=$("#sheet h2"); if(heading){ if(!heading.id) heading.id="askTitle"; sheet.setAttribute("aria-labelledby", heading.id); }
+  else sheet.removeAttribute("aria-labelledby");
+  const f=modalFocusables();
+  if(f.length) f[0].focus();
+  else { sheet.setAttribute("tabindex","-1"); sheet.focus(); }
+}
+function hideModal(closeDay){
+  $("#modal").classList.add("hidden"); modalKind=""; if(closeDay) modalDay=null;
+  const r=askDone; askDone=null;
+  const back=prevFocus; prevFocus=null;
+  if(r) r(null);
+  if(back && document.contains(back) && typeof back.focus==="function") try{ back.focus(); }catch(e){}
+}
 
 /* ---------- settings ---------- */
 function openSettings(){
@@ -444,7 +512,7 @@ function openSettings(){
   $("#sSave").onclick=()=>{ prefs.me=$("#sMe").value; prefs.apiUrl=$("#sUrl").value.trim(); prefs.pin=$("#sPin").value.trim(); prefs.kiosk=$("#sKiosk").checked; savePrefs(); hideModal(); lastSync=null; load(); setupKiosk(); };
   $("#sFile").onchange=async e=>{ const f=e.target.files[0]; if(f) $("#sImport").value = await f.text(); };
   $("#sExport").onclick=()=>{ const b=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="family-board-export.json"; a.click(); };
-  if($("#sReset")) $("#sReset").onclick=()=>{ if(confirm("Reset to the sample data?")){ localStorage.removeItem(DATA_KEY); hideModal(); load(); } };
+  if($("#sReset")) $("#sReset").onclick=async ()=>{ if(await ask("Reset to the sample data?","This replaces what's saved on this device.",[{label:"Reset", value:"yes", danger:true}],{cancelLabel:"Keep my data"})==="yes"){ localStorage.removeItem(DATA_KEY); hideModal(); load(); } };
   $("#sDoImport").onclick=async ()=>{
     let obj; try{ obj=JSON.parse($("#sImport").value); }catch(e){ toast("That isn't valid JSON"); return; }
     if(!live()){ data = normalise(Object.assign({settings:data.settings}, obj)); Local.save(); hideModal(); render(); toast("Imported"); return; }
@@ -468,12 +536,15 @@ function submitPin(){ const p=$("#pinInput").value.trim(); if(!p) return; prefs.
 function bind(){
   document.addEventListener("click", e=>{
     const cu = e.target.closest("[data-caughtup]");
-    if(cu){ const x=data.todos.find(y=>String(y.id)===cu.dataset.caughtup); if(x && confirm("Mark the missed days for \""+x.task+"\" as caught up?")){ const h=new Set(todoHistory(x)); missedDates(x).forEach(d=>h.add(d)); op("update","todos",{history:[...h].sort().slice(-60).join(",")},x.id); } return; }
+    if(cu){ const x=data.todos.find(y=>String(y.id)===cu.dataset.caughtup); if(!x) return;
+      ask("Mark the missed days for “"+x.task+"” as caught up?", "Those days will be treated as done.", [{label:"Mark as caught up", value:"yes"}], {cancelLabel:"Keep them missed"}).then(ok=>{
+        if(ok==="yes"){ const h=new Set(todoHistory(x)); missedDates(x).forEach(d=>h.add(d)); op("update","todos",{history:[...h].sort().slice(-60).join(",")},x.id); }
+      }); return; }
     const t = e.target.closest("[data-swdel],[data-toggle],[data-del],[data-edit],[data-quick],[data-day],[data-addday],[data-filter],[data-mealshop]");
     if(!t) { if(e.target.id==="modal") hideModal(true); return; }
     if(t.dataset.swdel){ swipeDelete(t.dataset.swdel, t.dataset.id); return; }
     if(t.dataset.toggle){ op("toggle", t.dataset.toggle, null, t.dataset.id); }
-    else if(t.dataset.del){ if(t.dataset.del==="events") deleteEvent(t.dataset.id); else if(confirm("Remove this?")) op("delete", t.dataset.del, null, t.dataset.id); }
+    else if(t.dataset.del){ if(t.dataset.del==="events") deleteEvent(t.dataset.id); else removeItem(t.dataset.del, t.dataset.id); }
     else if(t.dataset.edit){ openForm(t.dataset.edit, t.dataset.id); }
     else if(t.dataset.quick){ const q=t.dataset.quick; const map={event:"events",shopping:"shopping",todo:"todos",meal:"meals",note:"notes",trip:"trips"};
       const preset = q==="event"?{date:selDay}: q==="todo"?{assignee:prefs.me||""}: q==="shopping"?{category:"Other"}:{};
@@ -482,21 +553,39 @@ function bind(){
     else if(t.dataset.addday){ openForm("events", null, {date:t.dataset.addday}); }
     else if(t.dataset.filter){ prefs.todoFilter=t.dataset.filter; savePrefs(); renderTodos(); }
     else if(t.dataset.mealshop){ const m=data.meals.find(x=>String(x.id)===t.dataset.mealshop); if(!m) return;
-      if(!confirm("Add every ingredient from these recipes to the shopping list? You can untick or remove what you already have.")) return;
-      m.recipes.forEach(r=>(r.ingredients||[]).forEach(i=>op("add","shopping",{item:i, qty:"", category:guessCat(i), note:"For "+m.title+": "+r.name, done:false}))); }
+      ask("Add these ingredients to the shopping list?", "You can untick or remove what you already have.", [{label:"Add ingredients", value:"yes"}], {cancelLabel:"Don't add"}).then(ok=>{
+        if(ok==="yes") m.recipes.forEach(r=>(r.ingredients||[]).forEach(i=>op("add","shopping",{item:i, qty:"", category:guessCat(i), note:"For "+m.title+": "+r.name, done:false})));
+      }); }
   });
   const quick = (inp, btn, fn) => { const go=()=>{ const v=$(inp).value.trim(); if(!v) return; fn(v); $(inp).value=""; }; $(btn).onclick=go; $(inp).addEventListener("keydown",e=>{ if(e.key==="Enter") go(); }); };
   quick("#shopQuick","#shopAdd", v=>op("add","shopping",{item:v, qty:"", category:guessCat(v), done:false}));
   quick("#todoQuick","#todoAdd", v=>op("add","todos",{task:v, assignee:(prefs.todoFilter&&members().includes(prefs.todoFilter))?prefs.todoFilter:"", due:"", done:false}));
   quick("#noteQuick","#noteAdd", v=>op("add","notes",{text:v, pinned:false}));
-  $("#shopClear").onclick=()=>{ const done=data.shopping.filter(s=>s.done); if(!done.length) return; if(confirm("Remove "+done.length+" ticked item(s)?")) done.forEach(s=>op("delete","shopping",null,s.id)); };
+  $("#shopClear").onclick=async ()=>{
+    const done=data.shopping.filter(s=>s.done); if(!done.length) return;
+    const n=done.length;
+    if(await ask("Remove "+n+" ticked item"+(n===1?"":"s")+" from the shopping list?", "", [{label:"Remove", value:"yes", danger:true}], {cancelLabel:"Keep them"})!=="yes") return;
+    const snaps=done.map(s=>JSON.parse(JSON.stringify(s)));
+    let ok=true;
+    for(const s of snaps){ if(await op("delete","shopping",null,s.id,null,{silent:true})===false) ok=false; }
+    if(ok) toastUndo("Removed "+n+" ticked item"+(n===1?"":"s"), 6000, ()=>{ snaps.forEach(s=>{ const c=Object.assign({},s); delete c.id; op("add","shopping",c,null,null,{silent:true}); }); toast("Restored"); });
+  };
   $("#calPrev").onclick=()=>{ calCursor.setMonth(calCursor.getMonth()-1); renderCalendar(); };
   $("#calNext").onclick=()=>{ calCursor.setMonth(calCursor.getMonth()+1); renderCalendar(); };
   $("#calToday").onclick=()=>{ calCursor=new Date(); calCursor.setDate(1); selDay=todayStr(); renderCalendar(); };
   $("#settingsBtn").onclick=openSettings;
   $("#refreshBtn").onclick=()=>{ lastSync=null; load(); toast("Refreshing…"); };
   $("#pinGo").onclick=submitPin; $("#pinInput").addEventListener("keydown",e=>{ if(e.key==="Enter") submitPin(); });
-  document.addEventListener("keydown", e=>{ if(e.key==="Escape") hideModal(true); });
+  document.addEventListener("keydown", e=>{
+    if($("#modal").classList.contains("hidden")) return;
+    if(e.key==="Escape"){ e.preventDefault(); hideModal(true); return; }
+    if(e.key==="Tab"){
+      const f=modalFocusables(); if(!f.length) return;
+      const first=f[0], last=f[f.length-1];
+      if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+    }
+  });
   const onResume=()=>{ if(!document.hidden && live()) load(); };
   document.addEventListener("visibilitychange", onResume);
   window.addEventListener("pageshow", onResume);
